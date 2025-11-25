@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pro PDF Editor Suite</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script src="https://unpkg.com/@pdf-lib/fontkit@0.0.4/dist/fontkit.umd.min.js"></script>
+    
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; background-color: #1e1e1e; overflow: hidden; }
+        
+        /* Layout Grid */
+        #app-container {
+            display: grid;
+            grid-template-rows: 60px 40px 1fr;
+            height: 100vh;
+        }
+
+        /* Workspace */
+        #pdf-workspace {
+            overflow: auto;
+            background-color: #525659;
+            position: relative;
+            height: 100%;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .pdf-page-container {
+            position: relative;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            background: white;
+            /* ensures elements scale correctly with zoom */
+            transform-origin: top left;
+        }
+
+        /* Overlay & Elements */
+        .page-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: all; 
+            overflow: hidden;
+            z-index: 10;
+        }
+
+        /* Custom Elements Common */
+        .editor-element {
+            position: absolute;
+            z-index: 20;
+            user-select: none;
+            box-sizing: border-box;
+            touch-action: none; 
+            min-width: 10px;
+            min-height: 10px;
+        }
+        .editor-element:hover { outline: 1px dashed #3b82f6; cursor: move; }
+        .editor-element.selected { 
+            outline: 2px solid #2563eb; 
+            z-index: 50;
+            cursor: move; 
+        }
+        
+        /* Specific Elements */
+        .added-text {
+            font-family: Helvetica, sans-serif; 
+            color: #000;
+            line-height: 1.2;
+            padding: 6px; 
+            white-space: normal; 
+            word-break: break-word; 
+            overflow: visible; 
+            cursor: move; 
+        }
+        
+        .added-text:hover {
+            background-color: rgba(59, 130, 246, 0.05); 
+        }
+        
+        /* Editing State - The "Grandma Proof" Mode */
+        .added-text.selected.is-editing {
+            outline: 2px solid #ef4444; 
+            cursor: text !important; /* Force text cursor */
+            user-select: text !important; /* Enable native selection */
+            -webkit-user-select: text !important;
+            background-color: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Resizing Handles */
+        .resize-handle {
+            position: absolute;
+            z-index: 100;
+            touch-action: none;
+        }
+        .editor-element:not(.selected) .resize-handle {
+            display: none;
+        }
+
+        .shape-box { border: 2px solid #000; background: transparent; }
+        .shape-line { background-color: #000; }
+        .whiteout-box { background-color: white; border: none; } 
+        
+        /* Guides */
+        .guide-line {
+            background-color: #06b6d4; 
+            pointer-events: all;
+            z-index: 100;
+            border: none !important; 
+            outline: none !important;
+            opacity: 0.8;
+            transition: background-color 0.1s;
+        }
+        .guide-line.selected {
+            background-color: #ef4444; 
+        }
+
+        .guide-horizontal {
+            height: 1px;
+            width: 100%;
+            left: 0;
+            cursor: ns-resize;
+        }
+        .guide-vertical {
+            width: 1px;
+            height: 100%;
+            top: 0;
+            cursor: ew-resize;
+        }
+
+        /* Tools Active State */
+        .tool-btn { position: relative; }
+        .tool-btn.active {
+            background-color: #e0f2fe;
+            color: #0284c7;
+            border-color: #0284c7;
+        }
+
+        /* Tabs & Loader styles */
+        .tab-item { user-select: none; max-width: 200px; }
+        .tab-item.active { background-color: #525659; color: white; border-bottom: 2px solid #60a5fa; }
+        .dropdown-menu { display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #e5e5e5; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border-radius: 6px; z-index: 100; min-width: 150px; padding: 4px; }
+        .dropdown-menu.show { display: block; }
+        .loader { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #3498db; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        
+        <!-- Header / Toolbar -->
+        <header class="bg-white border-b border-gray-200 flex items-center justify-between px-4 z-50 shadow-sm">
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 text-gray-700 font-bold text-lg select-none">
+                    <div class="bg-red-600 text-white p-1 rounded-md text-sm"><i class="fa-solid fa-file-pdf"></i></div>
+                    <span class="hidden md:inline">PDF Studio</span>
+                </div>
+                
+                <div class="h-6 w-px bg-gray-300 mx-2"></div>
+
+                <!-- Main Tools -->
+                <div id="main-tools" class="flex items-center gap-1">
+                    <button onclick="setTool('cursor')" id="btn-cursor" class="tool-btn active p-2 rounded hover:bg-gray-100 text-gray-600 transition" title="Select / Move / Resize">
+                        <i class="fa-solid fa-arrow-pointer"></i>
+                    </button>
+                    
+                    <button onclick="setTool('text')" id="btn-text" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition" title="Draw Text Box">
+                        <i class="fa-solid fa-font"></i>
+                    </button>
+                    
+                    <!-- Guides Dropdown -->
+                    <div class="relative">
+                        <button onclick="toggleDropdown('guides-menu')" id="btn-guide" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition flex items-center gap-1" title="Insert Guide">
+                            <i class="fa-solid fa-ruler-combined"></i> <i class="fa-solid fa-caret-down text-xs"></i>
+                        </button>
+                        <div id="guides-menu" class="dropdown-menu">
+                            <div onclick="setTool('guide-h')" class="p-2 hover:bg-gray-100 rounded cursor-pointer flex items-center gap-2">
+                                <i class="fa-solid fa-ruler-horizontal"></i> H. Guide
+                            </div>
+                            <div onclick="setTool('guide-v')" class="p-2 hover:bg-gray-100 rounded cursor-pointer flex items-center gap-2">
+                                <i class="fa-solid fa-ruler-vertical"></i> V. Guide
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="setTool('whiteout')" id="btn-whiteout" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition" title="Whiteout / Eraser">
+                        <i class="fa-solid fa-eraser"></i>
+                    </button>
+
+                    <!-- Shapes Dropdown -->
+                    <div class="relative">
+                        <button onclick="toggleDropdown('shapes-menu')" id="btn-shape" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition flex items-center gap-1" title="Insert Shape">
+                            <i class="fa-solid fa-shapes"></i> <i class="fa-solid fa-caret-down text-xs"></i>
+                        </button>
+                        <div id="shapes-menu" class="dropdown-menu">
+                            <div onclick="setTool('line')" class="p-2 hover:bg-gray-100 rounded cursor-pointer flex items-center gap-2">
+                                <i class="fa-solid fa-minus"></i> Line
+                            </div>
+                            <div onclick="setTool('box')" class="p-2 hover:bg-gray-100 rounded cursor-pointer flex items-center gap-2">
+                                <i class="fa-regular fa-square"></i> Rectangle
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="h-6 w-px bg-gray-300 mx-2"></div>
+
+                <!-- Properties -->
+                <div class="flex items-center gap-2" id="properties-panel">
+                    <!-- Font Size -->
+                    <select id="font-size" onchange="updateSelectedProp('size')" class="h-8 text-sm border border-gray-300 rounded px-1 bg-gray-50 hover:bg-white focus:outline-none">
+                        <option value="10">10 pt</option>
+                        <option value="12" selected>12 pt</option>
+                        <option value="14">14 pt</option>
+                        <option value="18">18 pt</option>
+                        <option value="24">24 pt</option>
+                        <option value="36">36 pt</option>
+                    </select>
+                    
+                    <!-- Bold -->
+                    <button id="btn-bold" onmousedown="event.preventDefault()" onclick="toggleBold()" class="h-8 w-8 rounded hover:bg-gray-200 text-gray-600 font-bold text-lg" title="Bold (Ctrl/Cmd + B)">
+                        B
+                    </button>
+                    
+                    <!-- Color -->
+                    <div class="relative w-8 h-8 rounded border border-gray-300 cursor-pointer overflow-hidden" title="Color">
+                        <input type="color" id="elem-color" oninput="updateSelectedProp('color')" class="absolute -top-4 -left-4 w-16 h-16 cursor-pointer" value="#000000">
+                    </div>
+
+                    <button onclick="deleteSelected()" class="p-2 rounded hover:bg-red-100 text-gray-500 hover:text-red-600 transition" title="Delete Selected (Del)">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Side Actions -->
+            <div class="flex items-center gap-3">
+                <button onclick="document.getElementById('file-upload').click()" class="text-sm font-medium text-gray-600 hover:text-blue-600 flex items-center gap-2">
+                    <i class="fa-solid fa-folder-plus"></i> Open New
+                </button>
+                <button onclick="saveCurrentDoc()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded shadow-sm text-sm font-medium flex items-center gap-2 transition">
+                    <i class="fa-solid fa-download"></i> Save PDF
+                </button>
+            </div>
+        </header>
+
+        <!-- Tab Bar -->
+        <div class="bg-gray-200 border-b border-gray-300 flex items-end px-2 gap-1 overflow-x-auto h-full" id="tab-bar">
+            <div class="px-4 py-2 text-sm text-gray-500 italic">No document open</div>
+        </div>
+
+        <!-- Main Content -->
+        <main class="relative overflow-hidden">
+            <input type="file" id="file-upload" accept="application/pdf" class="hidden" onchange="handleFileSelect(event)">
+
+            <div id="empty-state" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-100 text-gray-500 z-0">
+                <div class="w-24 h-24 bg-gray-200 rounded-full flex items-center justify-center mb-4">
+                    <i class="fa-regular fa-file-pdf text-4xl text-gray-400"></i>
+                </div>
+                <h2 class="text-xl font-semibold text-gray-700">No Document Open</h2>
+                <p class="mb-6">Upload a PDF to start editing</p>
+                <button onclick="document.getElementById('file-upload').click()" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition shadow">
+                    Select PDF File
+                </button>
+            </div>
+
+            <div id="workspace-wrapper" class="hidden w-full h-full relative">
+                <div class="absolute bottom-6 right-6 z-50 bg-white rounded-lg shadow-lg border border-gray-200 flex flex-col overflow-hidden">
+                    <button onclick="changeZoom(0.1)" class="p-2 hover:bg-gray-100 border-b border-gray-100"><i class="fa-solid fa-plus"></i></button>
+                    <span id="zoom-label" class="text-xs text-center py-1 font-mono text-gray-500">100%</span>
+                    <button onclick="changeZoom(-0.1)" class="p-2 hover:bg-gray-100"><i class="fa-solid fa-minus"></i></button>
+                </div>
+                <div id="pdf-workspace"></div>
+            </div>
+
+            <div id="loader-overlay" class="hidden absolute inset-0 z-[100] bg-black/50 flex flex-col items-center justify-center text-white">
+                <div class="loader mb-3"></div>
+                <span id="loader-text">Processing...</span>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- Core Application State ---
+        let documents = []; 
+        let activeDocId = null;
+        let currentTool = 'cursor';
+        let selectedElement = null;
+        let SNAP_THRESHOLD = 10; 
+        let MIN_SIZE = 20; 
+
+        // --- Init ---
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // --- Event Listeners ---
+        document.addEventListener('click', (e) => {
+            if(!e.target.closest('.relative')) {
+                document.querySelectorAll('.dropdown-menu').forEach(el => el.classList.remove('show'));
+            }
+            // Deselect only if clicking blank space and NOT currently editing text
+            if (currentTool === 'cursor' && !e.target.closest('.editor-element')) {
+                 if (selectedElement && selectedElement.classList.contains('is-editing') && e.target.closest('#properties-panel')) {
+                     // Don't deselect if clicking properties panel while editing
+                 } else {
+                     deselectAll();
+                 }
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (document.activeElement && document.activeElement.isContentEditable) return; 
+            if(e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+        });
+
+        // --- Tab & Doc Management ---
+        function getActiveDoc() { return documents.find(d => d.id === activeDocId); }
+        
+        function getGuides(pageOverlay) {
+            if (!pageOverlay) return { horizontal: [], vertical: [] };
+            const guides = Array.from(pageOverlay.querySelectorAll('.guide-line'));
+            return {
+                horizontal: guides.filter(el => el.classList.contains('guide-horizontal')),
+                vertical: guides.filter(el => el.classList.contains('guide-vertical')),
+            };
+        }
+
+        function createDocument(file) {
+            showLoader(true, "Loading PDF...");
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const arrayBuffer = e.target.result;
+                const newDocId = Date.now().toString();
+                const newDoc = {
+                    id: newDocId,
+                    name: file.name,
+                    fileBytes: new Uint8Array(arrayBuffer.slice(0)),
+                    renderBytes: new Uint8Array(arrayBuffer.slice(0)),
+                    pdfDoc: null,
+                    pages: [], 
+                    scale: 1.0, 
+                    containerDiv: document.createElement('div'),
+                };
+                newDoc.containerDiv.className = "w-full flex flex-col items-center";
+                documents.push(newDoc);
+                renderPDFData(newDoc).then(() => {
+                    setActiveDocument(newDocId);
+                    renderTabs();
+                    showLoader(false);
+                }).catch(err => {
+                    console.error("PDF Render Error:", err);
+                    showLoader(false);
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        async function renderPDFData(docObj) {
+            try {
+                const loadingTask = pdfjsLib.getDocument({ data: docObj.renderBytes });
+                docObj.pdfDoc = await loadingTask.promise;
+                docObj.containerDiv.innerHTML = '';
+                docObj.pages = [];
+                for (let pageNum = 1; pageNum <= docObj.pdfDoc.numPages; pageNum++) {
+                    const page = await docObj.pdfDoc.getPage(pageNum);
+                    const viewport = page.getViewport({ scale: docObj.scale });
+                    const pageContainer = document.createElement('div');
+                    pageContainer.className = 'pdf-page-container';
+                    pageContainer.style.width = `${viewport.width}px`;
+                    pageContainer.style.height = `${viewport.height}px`;
+                    pageContainer.dataset.pageNum = pageNum;
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+                    await page.render({ canvasContext: context, viewport: viewport }).promise;
+                    const overlay = document.createElement('div');
+                    overlay.className = 'page-overlay';
+                    overlay.id = `overlay-${docObj.id}-${pageNum}`;
+                    setupOverlayEvents(overlay, docObj);
+                    pageContainer.appendChild(canvas);
+                    pageContainer.appendChild(overlay);
+                    docObj.containerDiv.appendChild(pageContainer);
+                    docObj.pages.push({ pageNum, viewport, width: viewport.width, height: viewport.height, element: overlay });
+                }
+            } catch (err) { console.error(err); throw new Error("Error rendering PDF"); }
+        }
+
+        function setActiveDocument(id) {
+            deselectAll();
+            activeDocId = id;
+            const doc = documents.find(d => d.id === id);
+            document.getElementById('empty-state').classList.add('hidden');
+            document.getElementById('workspace-wrapper').classList.remove('hidden');
+            const workspace = document.getElementById('pdf-workspace');
+            workspace.innerHTML = ''; 
+            workspace.appendChild(doc.containerDiv); 
+            document.getElementById('zoom-label').innerText = Math.round(doc.scale * 100) + '%';
+            doc.containerDiv.style.transform = `scale(${doc.scale})`;
+            renderTabs();
+        }
+
+        function closeDocument(e, id) {
+            e.stopPropagation();
+            documents = documents.filter(d => d.id !== id);
+            if(documents.length === 0) {
+                activeDocId = null;
+                document.getElementById('empty-state').classList.remove('hidden');
+                document.getElementById('workspace-wrapper').classList.add('hidden');
+            } else if (activeDocId === id) setActiveDocument(documents[documents.length - 1].id);
+            else renderTabs();
+        }
+
+        function renderTabs() {
+            const bar = document.getElementById('tab-bar');
+            bar.innerHTML = '';
+            if(documents.length === 0) { bar.innerHTML = '<div class="px-4 py-2 text-sm text-gray-500 italic">No document open</div>'; return; }
+            documents.forEach(doc => {
+                const isActive = doc.id === activeDocId;
+                const tab = document.createElement('div');
+                tab.className = `tab-item px-4 py-2 text-sm cursor-pointer flex items-center gap-2 border-r border-gray-300 ${isActive ? 'active' : 'bg-gray-100 text-gray-600 hover:bg-gray-50'}`;
+                tab.innerHTML = `<span class="truncate max-w-[120px]">${doc.name}</span><button class="hover:text-red-500 rounded-full p-0.5" onclick="closeDocument(event, '${doc.id}')"><i class="fa-solid fa-xmark"></i></button>`;
+                tab.onclick = () => setActiveDocument(doc.id);
+                bar.appendChild(tab);
+            });
+        }
+
+        // --- Tools Logic ---
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) createDocument(file);
+            event.target.value = ''; 
+        }
+
+        function setTool(name) {
+            currentTool = name;
+            document.querySelectorAll('.tool-btn').forEach(btn => btn.classList.remove('active'));
+            if(name === 'line' || name === 'box') document.getElementById('btn-shape').classList.add('active');
+            else if (name === 'guide-h' || name === 'guide-v') document.getElementById('btn-guide').classList.add('active');
+            else {
+                const btn = document.getElementById(`btn-${name}`);
+                if(btn) btn.classList.add('active');
+            }
+            document.querySelectorAll('.dropdown-menu').forEach(el => el.classList.remove('show'));
+            const ws = document.getElementById('pdf-workspace');
+            ws.style.cursor = name !== 'cursor' ? 'crosshair' : 'default';
+            deselectAll();
+        }
+
+        function toggleDropdown(id) { document.getElementById(id).classList.toggle('show'); }
+        
+        // --- Rich Text Editing Logic ---
+        function toggleBold() {
+            if (selectedElement && selectedElement.classList.contains('added-text')) {
+                // Apply to selection inside contentEditable
+                document.execCommand('bold', false, null);
+                selectedElement.focus(); // Keep focus
+                checkSelectionState();
+            }
+        }
+        
+        function updateSelectedProp(type) {
+            if(!selectedElement) return;
+            const val = type === 'size' ? document.getElementById('font-size').value : document.getElementById('elem-color').value;
+
+            if(selectedElement.classList.contains('added-text')) {
+                // If editing text, use execCommand for partial styling
+                selectedElement.focus();
+                if (type === 'color') {
+                    document.execCommand('foreColor', false, val);
+                } else if (type === 'size') {
+                    // Insert a span with explicit font size
+                    const sel = window.getSelection();
+                    if (sel.rangeCount) {
+                        const id = "fs-" + Date.now();
+                        // Hack: use fontsize 7 as placeholder, then swap it
+                        document.execCommand('fontSize', false, "7");
+                        const fonts = selectedElement.querySelectorAll('font[size="7"]');
+                        fonts.forEach(f => {
+                            f.removeAttribute("size");
+                            f.style.fontSize = val + "px";
+                        });
+                    }
+                }
+            } else {
+                // Shape styling
+                if(type === 'color') {
+                    if(selectedElement.classList.contains('shape-box')) selectedElement.style.borderColor = val;
+                    else if(selectedElement.classList.contains('shape-line')) selectedElement.style.backgroundColor = val;
+                }
+            }
+        }
+
+        // --- Interaction Logic ---
+        function setupOverlayEvents(overlay, docObj) {
+            let startX, startY;
+            let currentDrawing = null;
+
+            overlay.addEventListener('mousedown', (e) => {
+                // Grandma Feature: Smart Edit
+                if (currentTool === 'text' && e.target.classList.contains('added-text')) {
+                    e.stopPropagation();
+                    setTool('cursor');
+                    selectElement(e.target);
+                    enterEditMode(e.target);
+                    return;
+                }
+
+                if(e.target !== overlay || currentTool === 'cursor') return;
+
+                if(currentTool.startsWith('guide')) {
+                    createGuide(overlay, currentTool === 'guide-h' ? e.offsetY : e.offsetX, currentTool === 'guide-h' ? 'horizontal' : 'vertical');
+                    setTool('cursor');
+                    return;
+                }
+
+                const rect = overlay.getBoundingClientRect();
+                startX = e.offsetX;
+                startY = e.offsetY;
+
+                currentDrawing = document.createElement('div');
+                currentDrawing.className = 'editor-element';
+                currentDrawing.style.left = startX + 'px';
+                currentDrawing.style.top = startY + 'px';
+                
+                if(currentTool === 'whiteout') currentDrawing.classList.add('whiteout-box');
+                else if(currentTool === 'box') currentDrawing.classList.add('shape-box');
+                else if(currentTool === 'line') {
+                    currentDrawing.classList.add('shape-line');
+                    currentDrawing.style.height = '2px'; 
+                } else if (currentTool === 'text') {
+                    currentDrawing.classList.add('added-text');
+                    currentDrawing.contentEditable = true;
+                    // Default styles
+                    currentDrawing.style.fontSize = document.getElementById('font-size').value + 'px';
+                    currentDrawing.style.color = document.getElementById('elem-color').value;
+                    currentDrawing.innerHTML = 'Type here';
+                }
+
+                overlay.appendChild(currentDrawing);
+                currentDrawing.classList.add('selected');
+            });
+
+            overlay.addEventListener('mousemove', (e) => {
+                if(!currentDrawing) return;
+                const width = e.offsetX - startX;
+                const height = e.offsetY - startY;
+                const finalWidth = Math.max(MIN_SIZE, Math.abs(width));
+                const finalHeight = Math.max(MIN_SIZE, Math.abs(height));
+
+                currentDrawing.style.width = finalWidth + 'px';
+                currentDrawing.style.height = finalHeight + 'px';
+                currentDrawing.style.left = (width < 0 ? startX - finalWidth : startX) + 'px';
+                currentDrawing.style.top = (height < 0 ? startY - finalHeight : startY) + 'px';
+
+                if(currentTool === 'line') {
+                    currentDrawing.style.height = '2px';
+                    currentDrawing.style.top = startY + 'px';
+                }
+            });
+
+            overlay.addEventListener('mouseup', () => {
+                if(currentDrawing) {
+                    const el = currentDrawing;
+                    el.classList.remove('selected');
+                    if(el.offsetWidth < MIN_SIZE || el.offsetHeight < MIN_SIZE) {
+                        el.remove();
+                    } else {
+                        if(currentTool === 'box') el.style.borderColor = document.getElementById('elem-color').value;
+                        else if(currentTool === 'line') el.style.backgroundColor = document.getElementById('elem-color').value;
+                        
+                        enableDragAndSelect(el);
+                        selectElement(el);
+                        
+                        if(currentTool === 'text' && el.isConnected) {
+                            setTimeout(() => enterEditMode(el), 10);
+                        }
+                    }
+                    currentDrawing = null;
+                    setTool('cursor'); 
+                }
+            });
+        }
+        
+        function enterEditMode(el) {
+            el.focus();
+            el.classList.add('is-editing');
+            // We do NOT select all text, just place cursor (browser default on focus usually places at start or end)
+            checkSelectionState();
+        }
+
+        function createGuide(parent, pos, type) {
+            const el = document.createElement('div');
+            el.className = 'editor-element guide-line ' + (type === 'horizontal' ? 'guide-horizontal' : 'guide-vertical');
+            if(type === 'horizontal') { el.style.top = pos + 'px'; el.dataset.dragY = 'true'; }
+            else { el.style.left = pos + 'px'; el.dataset.dragX = 'true'; }
+            parent.appendChild(el);
+            enableDragAndSelect(el);
+            selectElement(el);
+        }
+
+        function enableDragAndSelect(el) {
+            let isDragging = false;
+            let offset = [0,0];
+            let pageOverlay = el.closest('.page-overlay');
+            if (!el.classList.contains('guide-line')) addResizingHandles(el);
+
+            function isEditing() { return el.classList.contains('added-text') && el.classList.contains('is-editing'); }
+
+            el.addEventListener('mousedown', (e) => {
+                if (e.target.classList.contains('resize-handle')) return;
+                if (isEditing()) {
+                    e.stopPropagation(); // Allow native text selection inside
+                    return; 
+                }
+                if (currentTool !== 'cursor' && !el.classList.contains('guide-line')) return;
+                
+                e.stopPropagation();
+                selectElement(el);
+                isDragging = true;
+                el.style.cursor = 'grabbing';
+                offset = [el.offsetLeft - e.clientX, el.offsetTop - e.clientY];
+            }); 
+            
+            // Double click to edit text
+            if(el.classList.contains('added-text')) {
+                el.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    enterEditMode(el);
+                });
+                
+                // Track cursor selection changes to update toolbar
+                el.addEventListener('keyup', checkSelectionState);
+                el.addEventListener('mouseup', checkSelectionState);
+            }
+
+            document.addEventListener('mouseup', () => {
+                if(isDragging) {
+                    isDragging = false;
+                    if(el.classList.contains('guide-horizontal')) el.style.cursor = 'ns-resize';
+                    else if(el.classList.contains('guide-vertical')) el.style.cursor = 'ew-resize';
+                    else if(!isEditing()) el.style.cursor = 'move';
+                }
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if(!isDragging) return;
+                e.preventDefault();
+                let newLeft = e.clientX + offset[0];
+                let newTop = e.clientY + offset[1];
+                
+                // Snapping
+                if (pageOverlay && !el.classList.contains('guide-line')) {
+                    const guides = getGuides(pageOverlay);
+                    guides.horizontal.forEach(g => {
+                        if (Math.abs(newTop - g.offsetTop) <= SNAP_THRESHOLD) newTop = g.offsetTop;
+                        else if (Math.abs(newTop + el.offsetHeight - g.offsetTop) <= SNAP_THRESHOLD) newTop = g.offsetTop - el.offsetHeight;
+                    });
+                    guides.vertical.forEach(g => {
+                        if (Math.abs(newLeft - g.offsetLeft) <= SNAP_THRESHOLD) newLeft = g.offsetLeft;
+                        else if (Math.abs(newLeft + el.offsetWidth - g.offsetLeft) <= SNAP_THRESHOLD) newLeft = g.offsetLeft - el.offsetWidth;
+                    });
+                }
+
+                if (el.dataset.dragY) el.style.top = newTop + 'px';
+                else if (el.dataset.dragX) el.style.left = newLeft + 'px';
+                else { el.style.left = newLeft + 'px'; el.style.top = newTop + 'px'; }
+            });
+        }
+
+        function addResizingHandles(el) {
+            el.querySelectorAll('.resize-handle').forEach(h => h.remove());
+            ['tl', 'tr', 'bl', 'br'].forEach(pos => {
+                const handle = document.createElement('div');
+                handle.className = `resize-handle ${pos} w-3 h-3 bg-blue-500 border border-white rounded-full absolute z-50`;
+                if(pos.includes('t')) handle.style.top = '-6px';
+                if(pos.includes('b')) handle.style.bottom = '-6px';
+                if(pos.includes('l')) handle.style.left = '-6px';
+                if(pos.includes('r')) handle.style.right = '-6px';
+                handle.style.cursor = (pos==='tl'||pos==='br') ? 'nwse-resize' : 'nesw-resize';
+                handle.dataset.position = pos;
+                el.appendChild(handle);
+                handle.addEventListener('mousedown', startResize);
+            });
+        }
+
+        let isResizing=false, resizeHandle=null, resizeEl=null, rStart={};
+        function startResize(e) {
+            e.stopPropagation();
+            isResizing = true;
+            resizeHandle = e.target;
+            resizeEl = resizeHandle.closest('.editor-element');
+            rStart = { x: e.clientX, y: e.clientY, w: resizeEl.offsetWidth, h: resizeEl.offsetHeight, l: resizeEl.offsetLeft, t: resizeEl.offsetTop };
+            document.addEventListener('mousemove', duringResize);
+            document.addEventListener('mouseup', endResize);
+        }
+        function duringResize(e) {
+            if(!isResizing) return;
+            e.preventDefault();
+            const dx = e.clientX - rStart.x;
+            const dy = e.clientY - rStart.y;
+            const p = resizeHandle.dataset.position;
+            let nw = rStart.w, nh = rStart.h, nl = rStart.l, nt = rStart.t;
+
+            if(p.includes('l')) { nw -= dx; if(nw >= MIN_SIZE) nl += dx; else nw = MIN_SIZE; }
+            else if(p.includes('r')) { nw += dx; nw = Math.max(MIN_SIZE, nw); }
+            
+            if(p.includes('t')) { nh -= dy; if(nh >= MIN_SIZE) nt += dy; else nh = MIN_SIZE; }
+            else if(p.includes('b')) { nh += dy; nh = Math.max(MIN_SIZE, nh); }
+
+            resizeEl.style.width = nw + 'px';
+            resizeEl.style.height = nh + 'px';
+            if(p.includes('l')) resizeEl.style.left = nl + 'px';
+            if(p.includes('t')) resizeEl.style.top = nt + 'px';
+        }
+        function endResize() {
+            isResizing = false;
+            document.removeEventListener('mousemove', duringResize);
+            document.removeEventListener('mouseup', endResize);
+        }
+
+        function selectElement(el) {
+            deselectAll();
+            selectedElement = el;
+            el.classList.add('selected');
+            el.querySelectorAll('.resize-handle').forEach(h => h.classList.remove('hidden'));
+            if(el.classList.contains('added-text')) {
+                // Initial sync with box styles or first char
+                checkSelectionState();
+            }
+        }
+
+        function deselectAll() {
+            if (selectedElement && selectedElement.classList.contains('added-text')) {
+                selectedElement.classList.remove('is-editing'); // Exit edit mode
+            }
+            document.querySelectorAll('.editor-element.selected').forEach(el => {
+                el.classList.remove('selected');
+                el.blur();
+            });
+            selectedElement = null;
+        }
+
+        function checkSelectionState() {
+            if (!selectedElement || !selectedElement.classList.contains('added-text')) return;
+            // Check bold
+            const isBold = document.queryCommandState('bold');
+            if(isBold) document.getElementById('btn-bold').classList.add('bg-gray-200');
+            else document.getElementById('btn-bold').classList.remove('bg-gray-200');
+            
+            // Note: Colors/Fonts are hard to sync perfectly with mixed selection, keeping default
+        }
+
+        function deleteSelected() {
+            if(selectedElement && !selectedElement.classList.contains('is-editing')) {
+                selectedElement.remove();
+                selectedElement = null;
+            }
+        }
+
+        function rgbToHex(col) {
+            if(!col) return '#000000';
+            if(col.startsWith('#')) return col;
+            const rgb = col.match(/\d+/g);
+            if(!rgb) return '#000000';
+            return "#" + ("0"+parseInt(rgb[0],10).toString(16)).slice(-2) + ("0"+parseInt(rgb[1],10).toString(16)).slice(-2) + ("0"+parseInt(rgb[2],10).toString(16)).slice(-2);
+        }
+
+        // --- Save PDF (Complex Rich Text Logic) ---
+        function changeZoom(delta) {
+            if(!activeDocId) return;
+            const doc = getActiveDoc();
+            doc.scale = parseFloat((doc.scale + delta).toFixed(1));
+            if(doc.scale < 0.5) doc.scale = 0.5;
+            if(doc.scale > 3.0) doc.scale = 3.0;
+            doc.containerDiv.style.transform = `scale(${doc.scale})`;
+            document.getElementById('zoom-label').innerText = Math.round(doc.scale * 100) + '%';
+        }
+
+        // Recursive helper to flatten DOM into text segments with style
+        function extractTextSegments(node, currentStyle) {
+            const segments = [];
+            if (node.nodeType === Node.TEXT_NODE) {
+                if (node.nodeValue.trim() !== '' || node.nodeValue.includes(' ')) {
+                    segments.push({ text: node.nodeValue, style: { ...currentStyle } });
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const newStyle = { ...currentStyle };
+                const s = window.getComputedStyle(node);
+                
+                if (s.fontWeight === 'bold' || parseInt(s.fontWeight) >= 700 || node.tagName === 'B' || node.tagName === 'STRONG') {
+                    newStyle.isBold = true;
+                }
+                if (s.fontStyle === 'italic' || node.tagName === 'I' || node.tagName === 'EM') {
+                    newStyle.isItalic = true; // (Optional, focusing on bold)
+                }
+                // Color
+                if (s.color) newStyle.color = rgbToHex(s.color);
+                // Font Size
+                if (s.fontSize) newStyle.fontSize = parseFloat(s.fontSize);
+
+                node.childNodes.forEach(child => {
+                    segments.push(...extractTextSegments(child, newStyle));
+                });
+            }
+            return segments;
+        }
+
+        async function saveCurrentDoc() {
+            if(!activeDocId) return;
+            const doc = getActiveDoc();
+            showLoader(true, "Generating PDF...");
+            
+            try {
+                const pdfDocLib = await PDFLib.PDFDocument.load(doc.fileBytes);
+                const standardFont = await pdfDocLib.embedFont(PDFLib.StandardFonts.Helvetica);
+                const boldFont = await pdfDocLib.embedFont(PDFLib.StandardFonts.HelveticaBold);
+                
+                const pages = pdfDocLib.getPages();
+                
+                doc.pages.forEach((p, index) => {
+                    const pdfPage = pages[index];
+                    const { width, height } = pdfPage.getSize(); 
+                    const scale = doc.scale; 
+
+                    const elements = Array.from(p.element.children).filter(el => el.classList.contains('editor-element'));
+                    
+                    elements.forEach(el => {
+                        if(el.classList.contains('guide-line')) return;
+
+                        const style = window.getComputedStyle(el);
+                        const left = parseFloat(style.left) / scale; 
+                        const top = parseFloat(style.top) / scale;
+                        const elWidth = parseFloat(style.width) / scale;
+                        const elHeight = parseFloat(style.height) / scale;
+
+                        if(el.classList.contains('added-text')) {
+                            // Rich Text Rendering Engine
+                            // 1. Extract segments
+                            const baseFontSize = parseFloat(style.fontSize) / scale;
+                            const baseColor = rgbToHex(style.color);
+                            const segments = extractTextSegments(el, { 
+                                isBold: (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700), 
+                                color: baseColor, 
+                                fontSize: baseFontSize 
+                            });
+
+                            // 2. Draw segments with simple word wrapping
+                            let cursorX = left;
+                            let cursorY = height - top - baseFontSize + (baseFontSize * 0.2); // Start at first baseline
+                            let currentLineHeight = baseFontSize * 1.2;
+
+                            segments.forEach(seg => {
+                                const font = seg.style.isBold ? boldFont : standardFont;
+                                const fontSize = (seg.style.fontSize) ? (seg.style.fontSize / scale) : baseFontSize;
+                                const rgb = hexToRgb(seg.style.color);
+                                const color = PDFLib.rgb(rgb.r/255, rgb.g/255, rgb.b/255);
+                                
+                                // Split by words to handle wrapping
+                                // Note: This is a basic wrapper. It doesn't handle complex splitting perfectly but works for general cases.
+                                const words = seg.text.split(/(\s+)/); // split but keep delimiters
+                                
+                                words.forEach(word => {
+                                    const widthOfWord = font.widthOfTextAtSize(word, fontSize);
+                                    
+                                    // Check if we need to wrap
+                                    if (cursorX + widthOfWord > left + elWidth && cursorX > left) {
+                                        // Wrap
+                                        cursorX = left;
+                                        cursorY -= currentLineHeight;
+                                    }
+                                    
+                                    pdfPage.drawText(word, {
+                                        x: cursorX,
+                                        y: cursorY,
+                                        size: fontSize,
+                                        font: font,
+                                        color: color
+                                    });
+                                    
+                                    cursorX += widthOfWord;
+                                });
+                            });
+
+                        } else {
+                            // Shapes
+                            const rgb = hexToRgb(el.style.borderColor || el.style.backgroundColor || '#000000');
+                            const pdfColor = PDFLib.rgb(rgb.r/255, rgb.g/255, rgb.b/255);
+                            const pdfY = height - top - elHeight;
+                            
+                            if (el.classList.contains('whiteout-box')) {
+                                pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, color: PDFLib.rgb(1,1,1), borderOpacity: 0 });
+                            } else if (el.classList.contains('shape-line')) {
+                                pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, color: pdfColor });
+                            } else if (el.classList.contains('shape-box')) {
+                                pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, borderColor: pdfColor, borderWidth: 2/scale, opacity: 1 });
+                            }
+                        }
+                    });
+                });
+
+                const pdfBytes = await pdfDocLib.save();
+                downloadBlob(pdfBytes, "edited_" + doc.name);
+            } catch(e) {
+                console.error(e);
+                console.error("Save failed.");
+            } finally { showLoader(false); }
+        }
+
+        function downloadBlob(data, fileName) {
+            const blob = new Blob([data], { type: "application/pdf" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 0, g: 0, b: 0 };
+        }
+    </script>
+</body>
+</html>

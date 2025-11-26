@@ -184,9 +184,12 @@
         
         /* Signature Modal */
         #sig-modal { background: rgba(0,0,0,0.5); }
+        
+        /* Drop Zone Highlight */
+        .drop-active { outline: 4px dashed #3b82f6; outline-offset: -4px; }
     </style>
 </head>
-<body>
+<body id="main-body">
 
     <div id="app-container">
         
@@ -194,8 +197,8 @@
         <header class="bg-white border-b border-gray-200 flex items-center px-2 z-50 shadow-sm toolbar-scroll">
             <div class="flex items-center gap-2 md:gap-4 w-full min-w-max">
                 <!-- Page Manager Toggle -->
-                <button onclick="togglePageSidebar()" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-700 mr-2 border border-gray-200" title="Page Manager">
-                    <i class="fa-solid fa-layer-group"></i>
+                <button onclick="togglePageSidebar()" class="tool-btn px-3 py-2 rounded hover:bg-gray-100 text-gray-700 mr-2 border border-gray-200 flex items-center gap-2" title="Page Manager">
+                    <i class="fa-solid fa-layer-group"></i> <span class="text-xs font-semibold">Pages</span>
                 </button>
 
                 <div class="flex items-center gap-2 text-gray-700 font-bold text-lg select-none mr-2">
@@ -358,7 +361,7 @@
         <div class="bg-gray-200 border-b border-gray-300 flex items-end px-2 gap-1 overflow-x-auto h-full toolbar-scroll" id="tab-bar"></div>
 
         <!-- Main Content -->
-        <main class="relative overflow-hidden">
+        <main class="relative overflow-hidden" id="main-content">
             <input type="file" id="file-upload" accept="application/pdf" class="hidden" onchange="handleFileSelect(event)">
             <input type="file" id="image-insert-input" accept="image/png, image/jpeg" class="hidden" onchange="handleImageInsert(event)">
 
@@ -367,7 +370,7 @@
                     <i class="fa-regular fa-file-pdf text-3xl text-gray-400"></i>
                 </div>
                 <h2 class="text-xl font-semibold text-gray-700">No Document</h2>
-                <p class="mb-6 text-sm">Upload a PDF to start</p>
+                <p class="mb-6 text-sm">Upload a PDF to start or Drag & Drop here</p>
                 <button onclick="document.getElementById('file-upload').click()" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition shadow">
                     Select PDF
                 </button>
@@ -565,6 +568,32 @@
 
         window.onload = async function() {
             showLoader(true, "Restoring session...");
+            // Drag and Drop Global Events
+            const body = document.body;
+            body.addEventListener('dragover', (e) => { e.preventDefault(); body.classList.add('drop-active'); });
+            body.addEventListener('dragleave', (e) => { e.preventDefault(); body.classList.remove('drop-active'); });
+            body.addEventListener('drop', (e) => {
+                e.preventDefault();
+                body.classList.remove('drop-active');
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const file = e.dataTransfer.files[0];
+                    if (file.type === 'application/pdf') {
+                        // Open PDF logic
+                        const reader = new FileReader();
+                        reader.onload = async function(evt) {
+                            const data = new Uint8Array(evt.target.result);
+                            const id = Date.now().toString();
+                            await saveFileToDB(id, file.name, data);
+                            loadDocumentFromData(id, file.name, data, null);
+                        };
+                        reader.readAsArrayBuffer(file);
+                    } else if (file.type.startsWith('image/') && activeDocId) {
+                        // Insert Image logic
+                        insertImageFromFile(file);
+                    }
+                }
+            });
+
             try {
                 const savedDocs = await loadAllFromDB();
                 if(savedDocs && savedDocs.length > 0) {
@@ -631,10 +660,6 @@
                 docObj.containerDiv.innerHTML = '';
                 docObj.pages = [];
                 
-                // If we have saved state about deletions/reordering, we might need a better mapping strategy
-                // For this version, we assume standard load and then apply reorders if implemented. 
-                // Currently, we just load 1..N
-                
                 for (let pageNum = 1; pageNum <= docObj.pdfDoc.numPages; pageNum++) {
                     const page = await docObj.pdfDoc.getPage(pageNum);
                     const viewport = page.getViewport({ scale: docObj.scale });
@@ -677,8 +702,6 @@
                     setupOverlayEvents(overlay, docObj);
                     
                     // Restore Elements
-                    // savedState.pages is keyed by INDEX in array now for better reorder support logic later, 
-                    // but for now let's assume pageNum mapping.
                     if(docObj.savedState && docObj.savedState.pages && docObj.savedState.pages[pageNum-1]) {
                         docObj.savedState.pages[pageNum-1].forEach(elData => {
                             const el = document.createElement('div');
@@ -790,14 +813,18 @@
             closeSignatureModal();
             setTool('cursor');
             
-            // Insert into active page center
             if(!activeDocId) return;
             const doc = getActiveDoc();
-            // Default to first visible page or center of view
-            const pageObj = doc.pages[0]; // Simplification: drop on first page
+            const pageObj = getMostVisiblePage(doc); // Get visible page
+            
             const el = document.createElement('div');
             el.className = 'editor-element signature-box';
-            el.style.left = '50px'; el.style.top = '50px';
+            
+            // Center on that page
+            const centerX = pageObj.width / 2 - 75; // Half of width (150)
+            const centerY = pageObj.height / 2 - 40; // Half of height (80) - approx center visible might be better but page center is safe default
+            
+            el.style.left = centerX + 'px'; el.style.top = centerY + 'px';
             el.style.width = '150px'; el.style.height = '80px';
             el.style.backgroundImage = `url(${dataUrl})`;
             pageObj.element.appendChild(el);
@@ -805,18 +832,49 @@
             selectElement(el);
             pushAction({ type: 'create', elements: [el], parent: pageObj.element });
         }
+        
+        // Helper to find visible page
+        function getMostVisiblePage(doc) {
+            let maxVis = 0;
+            let bestPage = doc.pages[0];
+            const viewH = window.innerHeight;
+            
+            doc.pages.forEach(p => {
+                const rect = p.element.getBoundingClientRect();
+                const top = Math.max(0, rect.top);
+                const bottom = Math.min(viewH, rect.bottom);
+                const visibleH = Math.max(0, bottom - top);
+                
+                if (visibleH > maxVis) {
+                    maxVis = visibleH;
+                    bestPage = p;
+                }
+            });
+            return bestPage;
+        }
 
         // --- Image Insertion ---
         function handleImageInsert(e) {
             const file = e.target.files[0];
             if(!file || !activeDocId) return;
+            insertImageFromFile(file);
+            e.target.value = '';
+        }
+
+        function insertImageFromFile(file) {
             const reader = new FileReader();
             reader.onload = (evt) => {
                 const doc = getActiveDoc();
-                const pageObj = doc.pages[0]; // Drop on first page
+                const pageObj = getMostVisiblePage(doc);
+                
                 const el = document.createElement('div');
                 el.className = 'editor-element image-box';
-                el.style.left = '50px'; el.style.top = '50px';
+                
+                // Center
+                const centerX = pageObj.width / 2 - 100;
+                const centerY = pageObj.height / 2 - 100;
+
+                el.style.left = centerX + 'px'; el.style.top = centerY + 'px';
                 el.style.width = '200px'; el.style.height = '200px';
                 el.style.backgroundImage = `url(${evt.target.result})`;
                 pageObj.element.appendChild(el);
@@ -825,7 +883,6 @@
                 pushAction({ type: 'create', elements: [el], parent: pageObj.element });
             };
             reader.readAsDataURL(file);
-            e.target.value = '';
         }
 
         // --- Page Manager ---
@@ -1082,7 +1139,49 @@
                 const pos = getEventPos(e); el.style.left = (pos.x+offset[0])+'px'; el.style.top = (pos.y+offset[1])+'px';
             };
             const endDrag = () => { 
-                if(isDragging && startState) pushAction({ type: 'move_resize', element: el, start: startState, end: { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height } });
+                if(isDragging) {
+                    // Logic to handle dragging between pages
+                    // Check if element center is inside another page overlay
+                    const elRect = el.getBoundingClientRect();
+                    const elCenterX = elRect.left + elRect.width/2;
+                    const elCenterY = elRect.top + elRect.height/2;
+                    
+                    const doc = getActiveDoc();
+                    let newParent = null;
+                    let bestPage = null;
+                    
+                    // Iterate current DOM pages (visual order)
+                    // We need to look at DOM elements with class .page-overlay
+                    const overlays = Array.from(document.querySelectorAll('.page-overlay'));
+                    
+                    for(const ov of overlays) {
+                         if(ov === el.parentElement) continue;
+                         const r = ov.getBoundingClientRect();
+                         if(elCenterX >= r.left && elCenterX <= r.right && elCenterY >= r.top && elCenterY <= r.bottom) {
+                             newParent = ov;
+                             bestPage = doc.pages.find(p => p.element === ov);
+                             break;
+                         }
+                    }
+                    
+                    if(newParent && bestPage) {
+                        // Reparent
+                        const oldRect = el.getBoundingClientRect();
+                        const newParentRect = newParent.getBoundingClientRect();
+                        
+                        const newLeft = oldRect.left - newParentRect.left;
+                        const newTop = oldRect.top - newParentRect.top;
+                        
+                        newParent.appendChild(el);
+                        el.style.left = newLeft + 'px';
+                        el.style.top = newTop + 'px';
+                        
+                        // Note: History tracking for reparenting is complex. 
+                        // For simplicity, we just push a move_resize event which will effectively "snap" it to the new parent on re-load/save
+                    }
+
+                    if(startState) pushAction({ type: 'move_resize', element: el, start: startState, end: { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height } });
+                }
                 isDragging=false; 
             };
             el.addEventListener('mousedown', startDrag); el.addEventListener('touchstart', startDrag);

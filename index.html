@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pro PDF Editor Suite</title>
+    <link rel="icon" type="image/png" href="logo.png">
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PDF Libraries -->
@@ -58,33 +59,57 @@
         /* Custom Elements Common */
         .editor-element {
             position: absolute;
-            z-index: 20;
             user-select: none; 
             box-sizing: border-box;
             touch-action: none; 
-            min-width: 10px;
-            min-height: 10px;
+            min-width: 5px; 
+            min-height: 1px; 
         }
         .editor-element:hover { outline: 1px dashed #3b82f6; }
         
-        /* Selected State */
+        /* Selected State - Highest Z-Index when selected */
         .editor-element.selected { 
             outline: 2px solid #2563eb; 
-            z-index: 50;
+            z-index: 100 !important; 
             cursor: move; 
         }
         
+        /* Layering Strategy:
+           10: Whiteout (Bottom)
+           20: Shapes/Lines
+           30: Text (Top)
+        */
+
+        .whiteout-box { 
+            /* background-color set dynamically now, default white */
+            background-color: white;
+            border: none; 
+            z-index: 10; 
+        } 
+        
+        .shape-box { 
+            border: 2px solid #000; 
+            background: transparent; 
+            z-index: 20;
+        }
+        
+        .shape-line { 
+            background-color: #000; 
+            z-index: 20;
+        }
+
         /* Specific Elements */
         .added-text {
             font-family: Helvetica, sans-serif; 
             color: #000;
             line-height: 1.2;
-            padding: 6px; 
+            padding: 2px 4px; 
             white-space: normal; 
             word-break: break-word; 
             overflow: hidden; 
             cursor: default;
             background: transparent;
+            z-index: 30; /* Always on top of whiteout */
         }
         
         .added-text:hover {
@@ -108,11 +133,20 @@
             z-index: 5;
             pointer-events: none; 
         }
+
+        /* Magic Selection Box */
+        .selection-box {
+            position: absolute;
+            border: 1px dashed #3b82f6;
+            background-color: rgba(59, 130, 246, 0.1);
+            z-index: 100;
+            pointer-events: none;
+        }
         
         /* Resizing Handles */
         .resize-handle {
             position: absolute;
-            z-index: 100;
+            z-index: 110; /* Above selected element */
             touch-action: none;
             display: none; 
             width: 10px;
@@ -125,32 +159,31 @@
             display: block;
         }
 
-        .shape-box { border: 2px solid #000; background: transparent; }
-        .shape-line { background-color: #000; }
-        .whiteout-box { background-color: white; border: none; } 
-        
         /* Guides */
         .guide-line {
             background-color: #06b6d4; 
             pointer-events: all;
-            z-index: 100;
+            z-index: 200; /* Above everything */
             border: none !important; 
             outline: none !important;
-            opacity: 0.8;
+            opacity: 0.5; 
             transition: background-color 0.1s;
         }
         .guide-line.selected {
             background-color: #ef4444; 
+            opacity: 1;
         }
 
         .guide-horizontal {
-            height: 1px;
+            height: 0.5px; 
+            min-height: 0.5px;
             width: 100%;
             left: 0;
             cursor: ns-resize;
         }
         .guide-vertical {
-            width: 1px;
+            width: 0.5px; 
+            min-width: 0.5px;
             height: 100%;
             top: 0;
             cursor: ew-resize;
@@ -292,7 +325,7 @@
 
         <!-- Tab Bar -->
         <div class="bg-gray-200 border-b border-gray-300 flex items-end px-2 gap-1 overflow-x-auto h-full" id="tab-bar">
-            <div class="px-4 py-2 text-sm text-gray-500 italic">No document open</div>
+            <!-- Tabs or loading state -->
         </div>
 
         <!-- Main Content -->
@@ -328,6 +361,80 @@
     </div>
 
     <script>
+        // --- IndexedDB Persistence Layer ---
+        const DB_NAME = 'PDFEditorDB';
+        const DB_VERSION = 1;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains('files')) {
+                        db.createObjectStore('files', { keyPath: 'id' });
+                    }
+                    if (!db.objectStoreNames.contains('state')) {
+                        db.createObjectStore('state', { keyPath: 'id' });
+                    }
+                };
+                request.onsuccess = (e) => resolve(e.target.result);
+                request.onerror = (e) => reject(e);
+            });
+        }
+
+        async function saveFileToDB(docId, name, arrayBuffer) {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(['files'], 'readwrite');
+                const store = tx.objectStore('files');
+                store.put({ id: docId, name: name, data: arrayBuffer });
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function saveStateToDB(docId, pagesData, scale) {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(['state'], 'readwrite');
+                const store = tx.objectStore('state');
+                store.put({ id: docId, pages: pagesData, scale: scale, lastModified: Date.now() });
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function loadAllFromDB() {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(['files', 'state'], 'readonly');
+                const filesStore = tx.objectStore('files');
+                const stateStore = tx.objectStore('state');
+                
+                const filesReq = filesStore.getAll();
+                const stateReq = stateStore.getAll();
+
+                tx.oncomplete = () => {
+                    const files = filesReq.result;
+                    const states = stateReq.result;
+                    // Merge
+                    const docs = files.map(f => {
+                        const s = states.find(st => st.id === f.id);
+                        return { ...f, state: s || null };
+                    });
+                    resolve(docs);
+                };
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function deleteDocFromDB(docId) {
+            const db = await initDB();
+            const tx = db.transaction(['files', 'state'], 'readwrite');
+            tx.objectStore('files').delete(docId);
+            tx.objectStore('state').delete(docId);
+        }
+
         // --- Core Application State ---
         let documents = []; 
         let activeDocId = null;
@@ -344,17 +451,61 @@
 
         function pushAction(action) {
             historyStack.push(action);
-            redoStack.length = 0; // Clear redo stack on new action
-            console.log("Action pushed:", action.type, historyStack.length);
+            redoStack.length = 0; 
+            
+            // Auto-Save State Trigger
+            if(activeDocId) {
+                const doc = getActiveDoc();
+                const serialized = serializeDocState(doc);
+                saveStateToDB(doc.id, serialized, doc.scale);
+            }
+        }
+
+        function serializeDocState(doc) {
+            const pagesState = {};
+            doc.pages.forEach(p => {
+                const elements = Array.from(p.element.children).filter(el => el.classList.contains('editor-element'));
+                pagesState[p.pageNum] = elements.map(el => {
+                    const style = el.style;
+                    return {
+                        classList: Array.from(el.classList).join(' '),
+                        style: {
+                            left: style.left, top: style.top, width: style.width, height: style.height,
+                            fontSize: style.fontSize, color: style.color, 
+                            borderColor: style.borderColor, backgroundColor: style.backgroundColor,
+                            fontWeight: style.fontWeight
+                        },
+                        innerHTML: el.innerHTML,
+                        dataset: { ...el.dataset }
+                    };
+                });
+            });
+            return pagesState;
         }
 
         function performUndo() {
             if (historyStack.length === 0) return;
             const action = historyStack.pop();
             redoStack.push(action);
+            applyActionUndo(action);
+            if(activeDocId) {
+                const doc = getActiveDoc();
+                saveStateToDB(doc.id, serializeDocState(doc), doc.scale);
+            }
+        }
 
-            console.log("Undoing:", action.type);
+        function performRedo() {
+            if (redoStack.length === 0) return;
+            const action = redoStack.pop();
+            historyStack.push(action);
+            applyActionRedo(action);
+            if(activeDocId) {
+                const doc = getActiveDoc();
+                saveStateToDB(doc.id, serializeDocState(doc), doc.scale);
+            }
+        }
 
+        function applyActionUndo(action) {
             switch (action.type) {
                 case 'create':
                     action.elements.forEach(el => el.remove());
@@ -363,7 +514,8 @@
                 case 'delete':
                     action.elements.forEach(el => {
                         action.parent.appendChild(el);
-                        enableDragAndSelect(el); // Re-enable listeners
+                        enableDragAndSelect(el);
+                        if(el.classList.contains('added-text')) setupTextEditing(el);
                     });
                     break;
                 case 'move_resize':
@@ -377,10 +529,8 @@
                     action.element.innerHTML = action.oldContent;
                     break;
                 case 'style':
-                    if (action.prop === 'bold') {
-                         if (action.element.style.fontWeight === 'bold') action.element.style.fontWeight = 'normal';
-                         else action.element.style.fontWeight = 'bold';
-                    } else if (action.prop === 'color') {
+                    if (action.prop === 'bold') action.element.style.fontWeight = action.oldVal;
+                    else if (action.prop === 'color') {
                          if (action.element.classList.contains('shape-box')) action.element.style.borderColor = action.oldVal;
                          else if (action.element.classList.contains('shape-line')) action.element.style.backgroundColor = action.oldVal;
                          else action.element.style.color = action.oldVal;
@@ -391,18 +541,13 @@
             }
         }
 
-        function performRedo() {
-            if (redoStack.length === 0) return;
-            const action = redoStack.pop();
-            historyStack.push(action);
-
-            console.log("Redoing:", action.type);
-
+        function applyActionRedo(action) {
             switch (action.type) {
                 case 'create':
                     action.elements.forEach(el => {
                         action.parent.appendChild(el);
                         enableDragAndSelect(el);
+                        if(el.classList.contains('added-text')) setupTextEditing(el);
                     });
                     break;
                 case 'delete':
@@ -420,7 +565,8 @@
                     action.element.innerHTML = action.newContent;
                     break;
                 case 'style':
-                     if (action.prop === 'color') {
+                     if (action.prop === 'bold') action.element.style.fontWeight = action.newVal;
+                     else if (action.prop === 'color') {
                          if (action.element.classList.contains('shape-box')) action.element.style.borderColor = action.newVal;
                          else if (action.element.classList.contains('shape-line')) action.element.style.backgroundColor = action.newVal;
                          else action.element.style.color = action.newVal;
@@ -433,6 +579,26 @@
 
         // --- Init ---
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        window.onload = async function() {
+            // Restore from DB
+            showLoader(true, "Restoring session...");
+            try {
+                const savedDocs = await loadAllFromDB();
+                if(savedDocs && savedDocs.length > 0) {
+                    for(const sDoc of savedDocs) {
+                         await loadDocumentFromData(sDoc.id, sDoc.name, sDoc.data, sDoc.state);
+                    }
+                    if(documents.length > 0) setActiveDocument(documents[0].id);
+                    else renderTabs();
+                } else {
+                    renderTabs();
+                }
+            } catch(e) {
+                console.error("Failed to load session", e);
+            }
+            showLoader(false);
+        };
 
         // --- Event Listeners ---
         document.addEventListener('click', (e) => {
@@ -457,9 +623,7 @@
             if(e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
         });
 
-        // Global Deselect Logic
         function handleWorkspaceClick(e) {
-            // Only deselect if we clicked explicitly on the background
             if (e.target.id === 'pdf-workspace' || e.target.classList.contains('pdf-page-container')) {
                 deselectAll();
             }
@@ -477,34 +641,43 @@
             };
         }
 
-        function createDocument(file) {
-            showLoader(true, "Loading PDF...");
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const arrayBuffer = e.target.result;
-                const newDocId = Date.now().toString();
-                const newDoc = {
-                    id: newDocId,
-                    name: file.name,
-                    fileBytes: new Uint8Array(arrayBuffer.slice(0)),
-                    renderBytes: new Uint8Array(arrayBuffer.slice(0)),
-                    pdfDoc: null,
-                    pages: [], 
-                    scale: 1.0, 
-                    containerDiv: document.createElement('div'),
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    const data = new Uint8Array(e.target.result);
+                    const id = Date.now().toString();
+                    await saveFileToDB(id, file.name, data); // Save File
+                    loadDocumentFromData(id, file.name, data, null);
                 };
-                newDoc.containerDiv.className = "w-full flex flex-col items-center";
-                documents.push(newDoc);
-                renderPDFData(newDoc).then(() => {
-                    setActiveDocument(newDocId);
-                    renderTabs();
-                    showLoader(false);
-                }).catch(err => {
-                    console.error("PDF Render Error:", err);
-                    showLoader(false);
-                });
+                reader.readAsArrayBuffer(file);
+            }
+            event.target.value = ''; 
+        }
+
+        async function loadDocumentFromData(id, name, data, savedState) {
+             const newDoc = {
+                id: id,
+                name: name,
+                fileBytes: data,
+                renderBytes: new Uint8Array(data), // Clone data for PDF.js to avoid buffer detachment issues
+                pdfDoc: null,
+                pages: [], 
+                scale: savedState ? savedState.scale : 1.0, 
+                containerDiv: document.createElement('div'),
+                savedState: savedState // Hold for restoration
             };
-            reader.readAsArrayBuffer(file);
+            newDoc.containerDiv.className = "w-full flex flex-col items-center";
+            documents.push(newDoc);
+            
+            try {
+                await renderPDFData(newDoc);
+                setActiveDocument(id);
+                renderTabs();
+            } catch(e) {
+                console.error(e);
+            }
         }
 
         async function renderPDFData(docObj) {
@@ -516,7 +689,6 @@
                 for (let pageNum = 1; pageNum <= docObj.pdfDoc.numPages; pageNum++) {
                     const page = await docObj.pdfDoc.getPage(pageNum);
                     const viewport = page.getViewport({ scale: docObj.scale });
-                    
                     const textContent = await page.getTextContent();
                     
                     const pageContainer = document.createElement('div');
@@ -524,18 +696,21 @@
                     pageContainer.style.width = `${viewport.width}px`;
                     pageContainer.style.height = `${viewport.height}px`;
                     pageContainer.dataset.pageNum = pageNum;
+                    
                     const canvas = document.createElement('canvas');
                     const context = canvas.getContext('2d');
                     canvas.height = viewport.height;
                     canvas.width = viewport.width;
                     await page.render({ canvasContext: context, viewport: viewport }).promise;
                     
-                    // The Overlay
                     const overlay = document.createElement('div');
                     overlay.className = 'page-overlay';
                     overlay.id = `overlay-${docObj.id}-${pageNum}`;
                     
-                    // Click on overlay empty space to deselect
+                    // Add saved textContent to page object for magic wand
+                    docObj.pages.push({ pageNum, viewport, width: viewport.width, height: viewport.height, element: overlay, textContent });
+                    
+                    // Deselect
                     overlay.addEventListener('mousedown', (e) => {
                         if (e.target === overlay && currentTool === 'cursor') {
                              deselectAll();
@@ -544,13 +719,34 @@
                     
                     setupOverlayEvents(overlay, docObj);
                     
-                    overlay.addEventListener('mousemove', (e) => handleMagicHover(e, textContent, viewport, overlay));
-                    overlay.addEventListener('click', (e) => handleMagicClick(e, textContent, viewport, overlay));
+                    // Restore Elements if state exists
+                    if(docObj.savedState && docObj.savedState.pages && docObj.savedState.pages[pageNum]) {
+                        docObj.savedState.pages[pageNum].forEach(elData => {
+                            const el = document.createElement('div');
+                            el.className = elData.classList;
+                            Object.assign(el.style, elData.style);
+                            el.innerHTML = elData.innerHTML;
+                            if(elData.dataset) Object.assign(el.dataset, elData.dataset);
+                            
+                            // Specific restoration logic
+                            if(el.classList.contains('added-text')) {
+                                el.contentEditable = true;
+                                setupTextEditing(el);
+                            }
+                            if(el.classList.contains('guide-line')) {
+                                // Guides need specific pointers
+                                if(el.classList.contains('guide-horizontal')) el.dataset.dragY = 'true';
+                                else el.dataset.dragX = 'true';
+                            }
+                            
+                            overlay.appendChild(el);
+                            enableDragAndSelect(el);
+                        });
+                    }
 
                     pageContainer.appendChild(canvas);
                     pageContainer.appendChild(overlay);
                     docObj.containerDiv.appendChild(pageContainer);
-                    docObj.pages.push({ pageNum, viewport, width: viewport.width, height: viewport.height, element: overlay });
                 }
             } catch (err) { console.error(err); throw new Error("Error rendering PDF"); }
         }
@@ -571,6 +767,7 @@
 
         function closeDocument(e, id) {
             e.stopPropagation();
+            deleteDocFromDB(id); // Remove from persistence
             documents = documents.filter(d => d.id !== id);
             if(documents.length === 0) {
                 activeDocId = null;
@@ -595,12 +792,6 @@
         }
 
         // --- Tools Logic ---
-        function handleFileSelect(event) {
-            const file = event.target.files[0];
-            if (file) createDocument(file);
-            event.target.value = ''; 
-        }
-
         function setTool(name) {
             currentTool = name;
             document.querySelectorAll('.tool-btn').forEach(btn => btn.classList.remove('active'));
@@ -613,7 +804,7 @@
             document.querySelectorAll('.dropdown-menu').forEach(el => el.classList.remove('show'));
             const ws = document.getElementById('pdf-workspace');
             
-            if (name === 'magic') ws.style.cursor = 'context-menu'; 
+            if (name === 'magic') ws.style.cursor = 'crosshair'; 
             else if (name !== 'cursor') ws.style.cursor = 'crosshair'; 
             else ws.style.cursor = 'default';
             
@@ -623,100 +814,169 @@
 
         function toggleDropdown(id) { document.getElementById(id).classList.toggle('show'); }
         
-        // --- Magic Text Feature ---
-        let highlightedItem = null;
+        // --- Magic Text Feature (Box & Click) ---
+        let magicBox = null;
+        let magicStart = null;
 
         function handleMagicHover(e, textContent, viewport, overlay) {
-            if (currentTool !== 'magic') return;
+            // Only highlight single items if not dragging
+            if (currentTool !== 'magic' || magicStart) return; 
             
+            // Remove previous hover highlights
             const existing = overlay.querySelector('.magic-highlight');
             if (existing) existing.remove();
-            highlightedItem = null;
+        }
 
-            const x = e.offsetX;
-            const y = e.offsetY;
+        function handleMagicClick(e, textContent, viewport, overlay) {
+           // Click handled in setupOverlayEvents (mousedown/up) now to support dragging
+        }
+
+        function processMagicSelection(rect, textContent, viewport, overlay) {
+            let matches = [];
 
             for (const item of textContent.items) {
                 const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
                 const vx = tx[4];
                 const vy = tx[5]; 
-                
                 const fontSize = Math.sqrt(tx[2]*tx[2] + tx[3]*tx[3]); 
                 const realWidth = item.width * Math.sqrt(tx[0]*tx[0] + tx[1]*tx[1]); 
                 
-                const padding = 5;
+                const tLeft = vx;
+                const tTop = vy - fontSize;
+                const tRight = vx + realWidth;
+                const tBottom = vy;
 
-                if (x >= vx - padding && x <= vx + realWidth + padding && 
-                    y <= vy + padding && y >= vy - fontSize - padding) {
-                    
-                    highlightedItem = { item, vx, vy, w: realWidth, h: fontSize };
-                    
-                    const hl = document.createElement('div');
-                    hl.className = 'magic-highlight';
-                    hl.style.left = vx + 'px';
-                    hl.style.top = (vy - fontSize) + 'px';
-                    hl.style.width = realWidth + 'px';
-                    hl.style.height = fontSize + 'px';
-                    overlay.appendChild(hl);
-                    break;
+                // Check Intersection
+                const intersects = !(rect.x > tRight || 
+                                   (rect.x + rect.w) < tLeft || 
+                                   rect.y > tBottom || 
+                                   (rect.y + rect.h) < tTop);
+
+                // Add stricter filtering
+                if (intersects && item.str.trim().length > 0 && realWidth > 0) {
+                    matches.push({
+                        str: item.str,
+                        x: tLeft,
+                        y: tTop,
+                        w: realWidth,
+                        h: fontSize,
+                        r: tRight,
+                        b: tBottom
+                    });
                 }
             }
-        }
-
-        function handleMagicClick(e, textContent, viewport, overlay) {
-            if (currentTool !== 'magic' || !highlightedItem) return;
-            e.stopPropagation();
-
-            const { item, vx, vy, w, h } = highlightedItem;
             
-            // Whiteout
-            const whiteout = document.createElement('div');
-            whiteout.className = 'editor-element whiteout-box';
-            whiteout.style.left = (vx - 2) + 'px';
-            whiteout.style.top = (vy - h - 2) + 'px';
-            whiteout.style.width = (w + 5) + 'px';
-            whiteout.style.height = (h + 4) + 'px';
-            overlay.appendChild(whiteout);
+            if (matches.length === 0) return;
 
-            // New Text
+            // 1. Calculate Average Font Size
+            let avgFontSize = 0;
+            matches.forEach(m => avgFontSize += m.h);
+            avgFontSize = avgFontSize / matches.length;
+            
+            // 2. Sort Matches
+            matches.sort((a, b) => {
+                if (Math.abs(a.y - b.y) > (avgFontSize / 2)) {
+                    return a.y - b.y;
+                }
+                return a.x - b.x;
+            });
+
+            // 3. Construct the Combined Text (Reflow Logic)
+            let combinedText = "";
+            let lastY = matches[0].y;
+            let lastX = matches[0].x;
+
+            matches.forEach((m, i) => {
+                // Large vertical gap -> New Paragraph
+                if (Math.abs(m.y - lastY) > (avgFontSize * 1.5) && i > 0) {
+                    combinedText += "\n";
+                } 
+                // Space Detection (simple approx)
+                else if (i > 0) {
+                     combinedText += " ";
+                }
+                
+                combinedText += m.str;
+                lastY = m.y;
+            });
+
+
+            // --- FIX: Use User Box for dimensions to prevent weird resizing ---
+            
+            const boxX = rect.x;
+            const boxY = rect.y;
+            const boxW = rect.w;
+            const boxH = rect.h;
+
+            // Determine Background Color
+            let bgColor = 'white';
+            try {
+                // Find canvas sibling (usually previous element)
+                const pageContainer = overlay.parentElement;
+                const canvas = pageContainer.querySelector('canvas');
+                if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    // Sample slightly outside topleft of box (padding area) to find background
+                    // Ensure we don't go negative
+                    const sampleX = Math.max(0, boxX - 5);
+                    const sampleY = Math.max(0, boxY - 5);
+                    const p = ctx.getImageData(sampleX, sampleY, 1, 1).data;
+                    // Convert to Hex/RGB string
+                    bgColor = `rgb(${p[0]}, ${p[1]}, ${p[2]})`;
+                }
+            } catch(e) {
+                console.log("Could not sample background color", e);
+            }
+
+            // 1. Create ONE Text Box
             const newText = document.createElement('div');
             newText.className = 'editor-element added-text';
-            newText.contentEditable = true; // Set to True on creation like old code
-            newText.style.left = vx + 'px';
-            newText.style.top = (vy - h * 1.1) + 'px'; 
-            newText.style.fontSize = Math.round(h) + 'px';
+            newText.contentEditable = true;
+            newText.style.left = boxX + 'px';
+            newText.style.top = boxY + 'px'; 
+            newText.style.width = boxW + 'px'; // Enforce drawn width
+            newText.style.fontSize = Math.round(avgFontSize) + 'px';
             newText.style.color = '#000000';
-            newText.innerText = item.str;
+            newText.style.whiteSpace = 'normal'; // Allow reflow
+            newText.innerText = combinedText;
             
             overlay.appendChild(newText);
             
-            // Record Action for Undo
+            // 2. Create ONE Whiteout Box matching drawn box
+            const whiteout = document.createElement('div');
+            whiteout.className = 'editor-element whiteout-box';
+            whiteout.style.left = boxX + 'px';
+            whiteout.style.top = boxY + 'px';
+            whiteout.style.width = boxW + 'px';
+            whiteout.style.height = boxH + 'px';
+            whiteout.style.backgroundColor = bgColor; // Apply sampled color
+            
+            // Insert whiteout BEFORE text so it's behind
+            overlay.insertBefore(whiteout, newText);
+
+            setupTextEditing(newText);
+            enableDragAndSelect(newText);
+            enableDragAndSelect(whiteout);
+            
+            // Push distinct elements (not grouped)
             pushAction({
                 type: 'create',
                 elements: [whiteout, newText],
                 parent: overlay
             });
-            
-            setTool('cursor');
-            enableDragAndSelect(newText);
-            selectElement(newText);
-            // Setup events
-            setupTextEditing(newText);
-            
-            setTimeout(() => {
-                newText.focus();
-                newText.classList.add('is-editing');
-                document.execCommand('selectAll',false,null);
-            }, 10);
         }
 
         // --- Interaction Logic ---
         function setupOverlayEvents(overlay, docObj) {
             let startX, startY;
             let currentDrawing = null;
+            let isMagicDragging = false;
 
             overlay.addEventListener('mousedown', (e) => {
                 if(e.target !== overlay) return;
+
+                startX = e.offsetX;
+                startY = e.offsetY;
 
                 if(currentTool.startsWith('guide')) {
                     const el = createGuide(overlay, currentTool === 'guide-h' ? e.offsetY : e.offsetX, currentTool === 'guide-h' ? 'horizontal' : 'vertical');
@@ -725,10 +985,19 @@
                     return;
                 }
                 
-                if (currentTool === 'cursor' || currentTool === 'magic') return; 
+                if (currentTool === 'cursor') return; 
 
-                startX = e.offsetX;
-                startY = e.offsetY;
+                if (currentTool === 'magic') {
+                    isMagicDragging = true;
+                    magicBox = document.createElement('div');
+                    magicBox.className = 'selection-box';
+                    magicBox.style.left = startX + 'px';
+                    magicBox.style.top = startY + 'px';
+                    magicBox.style.width = '0px';
+                    magicBox.style.height = '0px';
+                    overlay.appendChild(magicBox);
+                    return;
+                }
 
                 currentDrawing = document.createElement('div');
                 currentDrawing.className = 'editor-element';
@@ -739,10 +1008,10 @@
                 else if(currentTool === 'box') currentDrawing.classList.add('shape-box');
                 else if(currentTool === 'line') {
                     currentDrawing.classList.add('shape-line');
-                    currentDrawing.style.height = '2px'; 
+                    currentDrawing.style.height = '1px'; // Changed to 1px
                 } else if (currentTool === 'text') {
                     currentDrawing.classList.add('added-text');
-                    currentDrawing.contentEditable = true; // Set to True
+                    currentDrawing.contentEditable = true; 
                     currentDrawing.style.fontSize = document.getElementById('font-size').value + 'px';
                     currentDrawing.style.color = document.getElementById('elem-color').value;
                     currentDrawing.innerHTML = 'Type here';
@@ -753,9 +1022,21 @@
             });
 
             overlay.addEventListener('mousemove', (e) => {
-                if(!currentDrawing) return;
                 const width = e.offsetX - startX;
                 const height = e.offsetY - startY;
+
+                if (currentTool === 'magic' && isMagicDragging && magicBox) {
+                    const finalWidth = Math.abs(width);
+                    const finalHeight = Math.abs(height);
+                    magicBox.style.width = finalWidth + 'px';
+                    magicBox.style.height = finalHeight + 'px';
+                    magicBox.style.left = (width < 0 ? startX - finalWidth : startX) + 'px';
+                    magicBox.style.top = (height < 0 ? startY - finalHeight : startY) + 'px';
+                    return;
+                }
+
+                if(!currentDrawing) return;
+                
                 const finalWidth = Math.max(MIN_SIZE, Math.abs(width));
                 const finalHeight = Math.max(MIN_SIZE, Math.abs(height));
 
@@ -765,15 +1046,54 @@
                 currentDrawing.style.top = (height < 0 ? startY - finalHeight : startY) + 'px';
 
                 if(currentTool === 'line') {
-                    currentDrawing.style.height = '2px';
+                    currentDrawing.style.height = '1px'; // Maintain 1px during drag
                     currentDrawing.style.top = startY + 'px';
                 }
             });
 
             overlay.addEventListener('mouseup', () => {
+                if (currentTool === 'magic' && magicBox) {
+                    // Capture bounds
+                    const rect = {
+                        x: parseInt(magicBox.style.left),
+                        y: parseInt(magicBox.style.top),
+                        w: parseInt(magicBox.style.width),
+                        h: parseInt(magicBox.style.height)
+                    };
+                    magicBox.remove();
+                    magicBox = null;
+                    isMagicDragging = false;
+                    
+                    // Increased Threshold to 15px to distinguish accidental drags vs box selects
+                    const isClick = rect.w < 15 && rect.h < 15;
+
+                    if (isClick) {
+                        // Expand rect to act as point click
+                         rect.x -= 5; rect.y -= 5; rect.w = 10; rect.h = 10;
+                    }
+
+                    // Find text in bounds
+                    const pageObj = docObj.pages.find(p => p.element === overlay);
+                    if(pageObj) {
+                        processMagicSelection(rect, pageObj.textContent, pageObj.viewport, overlay);
+                    }
+                    return;
+                }
+
                 if(currentDrawing) {
                     const el = currentDrawing;
-                    if(el.offsetWidth < MIN_SIZE || el.offsetHeight < MIN_SIZE) {
+                    
+                    // Validation Logic
+                    let isValid = true;
+                    if(currentTool === 'line') {
+                        // For lines, check width (length) only
+                        if(el.offsetWidth < 5) isValid = false; // Allow down to 5px
+                    } else {
+                        // For boxes/text, check both
+                        if(el.offsetWidth < MIN_SIZE || el.offsetHeight < MIN_SIZE) isValid = false;
+                    }
+
+                    if(!isValid) {
                         el.remove();
                         selectedElement = null; 
                     } else {
@@ -806,17 +1126,21 @@
                 el.focus();
                 el.classList.add('is-editing');
             });
-            
             el.addEventListener('blur', () => { 
-                // Capture content change for Undo logic could go here
                 el.classList.remove('is-editing');
+                // Trigger save on blur
+                if(activeDocId) {
+                     const doc = getActiveDoc();
+                     saveStateToDB(doc.id, serializeDocState(doc), doc.scale);
+                }
             });
             el.addEventListener('focus', () => { 
                 el.classList.add('is-editing'); 
                 checkSelectionState();
             });
-            // Capture initial content for undo when entering edit mode logic omitted for brevity in this specific fix
-            // but we can add 'input' listeners if needed.
+            el.addEventListener('input', () => {
+                 // Optional: Debounce save here if needed
+            });
         }
 
         function createGuide(parent, pos, type) {
@@ -840,13 +1164,12 @@
             el.addEventListener('mousedown', (e) => {
                 if (e.target.classList.contains('resize-handle')) return;
                 
-                // If editing, don't drag. If not Cursor tool, don't drag.
                 if (isEditing() || (currentTool !== 'cursor' && !el.classList.contains('guide-line'))) { 
                     return; 
                 }
                 
                 e.stopPropagation(); 
-                e.preventDefault(); // <--- CRITICAL: Prevents contentEditable from stealing focus, allowing drag
+                e.preventDefault(); 
                 
                 selectElement(el);
                 
@@ -860,8 +1183,6 @@
                 };
             }); 
             
-            // Double click handled in setupTextEditing
-
             document.addEventListener('mouseup', () => {
                 if(isDragging) {
                     isDragging = false;
@@ -887,6 +1208,40 @@
                 let newLeft = e.clientX + offset[0];
                 let newTop = e.clientY + offset[1];
                 
+                // Snapping Logic
+                const overlay = el.closest('.page-overlay');
+                if (overlay && currentTool === 'cursor') {
+                    const guides = getGuides(overlay);
+                    let snappedX = false;
+                    let snappedY = false;
+
+                    // Vertical Guides (Snap X)
+                    guides.vertical.forEach(g => {
+                        const gx = parseFloat(g.style.left);
+                        // Snap left edge
+                        if (Math.abs(newLeft - gx) < SNAP_THRESHOLD) {
+                            newLeft = gx; snappedX = true;
+                        }
+                        // Snap right edge
+                        else if (Math.abs((newLeft + el.offsetWidth) - gx) < SNAP_THRESHOLD) {
+                            newLeft = gx - el.offsetWidth; snappedX = true;
+                        }
+                    });
+
+                    // Horizontal Guides (Snap Y)
+                    guides.horizontal.forEach(g => {
+                        const gy = parseFloat(g.style.top);
+                        // Snap top edge
+                        if (Math.abs(newTop - gy) < SNAP_THRESHOLD) {
+                            newTop = gy; snappedY = true;
+                        }
+                        // Snap bottom edge
+                        else if (Math.abs((newTop + el.offsetHeight) - gy) < SNAP_THRESHOLD) {
+                            newTop = gy - el.offsetHeight; snappedY = true;
+                        }
+                    });
+                }
+                
                 if (el.dataset.dragY) el.style.top = newTop + 'px';
                 else if (el.dataset.dragX) el.style.left = newLeft + 'px';
                 else { el.style.left = newLeft + 'px'; el.style.top = newTop + 'px'; }
@@ -894,6 +1249,9 @@
         }
 
         function addResizingHandles(el) {
+            // No handles for guides
+            if(el.classList.contains('guide-line')) return;
+
             el.querySelectorAll('.resize-handle').forEach(h => h.remove());
             ['tl', 'tr', 'bl', 'br'].forEach(pos => {
                 const handle = document.createElement('div');
@@ -1001,18 +1359,13 @@
             if (!selectedElement) return;
             
             if (selectedElement.classList.contains('added-text')) {
-                // If in active edit mode (cursor inside), use rich text command
                 if (selectedElement.classList.contains('is-editing')) {
                      selectedElement.focus();
                      restoreSelection();
                      document.execCommand('bold', false, null);
                 } else {
-                    // If just selected (box selection), toggle the CSS font-weight
-                    // This allows user to bold the whole box without diving into it
                     const current = selectedElement.style.fontWeight;
                     selectedElement.style.fontWeight = (current === 'bold' || parseInt(current) >= 700) ? 'normal' : 'bold';
-                    
-                    // Push action for undo
                      pushAction({
                         type: 'style',
                         element: selectedElement,
@@ -1028,8 +1381,6 @@
         function updateSelectedProp(type) {
             if(!selectedElement) return;
             const val = type === 'size' ? document.getElementById('font-size').value : document.getElementById('elem-color').value;
-
-            // Push Undo for style
             const oldVal = (type === 'size') ? selectedElement.style.fontSize : selectedElement.style.color; 
             
             if(selectedElement.classList.contains('added-text')) {
@@ -1038,7 +1389,6 @@
                     restoreSelection();
                     if (type === 'color') document.execCommand('foreColor', false, val);
                     else if (type === 'size') {
-                        const id = "fs-" + Date.now();
                         document.execCommand('fontSize', false, "7");
                         const fonts = selectedElement.querySelectorAll('font[size="7"]');
                         fonts.forEach(f => { f.removeAttribute("size"); f.style.fontSize = val + "px"; });
@@ -1080,6 +1430,36 @@
             return "#" + ("0"+parseInt(rgb[0],10).toString(16)).slice(-2) + ("0"+parseInt(rgb[1],10).toString(16)).slice(-2) + ("0"+parseInt(rgb[2],10).toString(16)).slice(-2);
         }
 
+        // --- NEW: Parse Color Robustly (Handles RGB and Hex) ---
+        function parseColorString(colorStr) {
+            if (!colorStr) return { r: 0, g: 0, b: 0 };
+            
+            // Handle RGB/RGBA
+            if (colorStr.trim().startsWith('rgb')) {
+                const parts = colorStr.match(/\d+/g);
+                if (parts && parts.length >= 3) {
+                    return { r: parseInt(parts[0]), g: parseInt(parts[1]), b: parseInt(parts[2]) };
+                }
+            }
+            
+            // Handle Hex
+            if (colorStr.startsWith('#')) {
+                const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(colorStr);
+                return result ? {
+                    r: parseInt(result[1], 16),
+                    g: parseInt(result[2], 16),
+                    b: parseInt(result[3], 16)
+                } : { r: 0, g: 0, b: 0 };
+            }
+            
+            return { r: 0, g: 0, b: 0 }; // Default to black
+        }
+
+        // Renamed wrapper for backward compat if needed, but updated logic below
+        function hexToRgb(hex) {
+           return parseColorString(hex);
+        }
+
         function changeZoom(delta) {
             if(!activeDocId) return;
             const doc = getActiveDoc();
@@ -1088,6 +1468,8 @@
             if(doc.scale > 3.0) doc.scale = 3.0;
             doc.containerDiv.style.transform = `scale(${doc.scale})`;
             document.getElementById('zoom-label').innerText = Math.round(doc.scale * 100) + '%';
+            // Save state on zoom change (scale persistence)
+            saveStateToDB(doc.id, serializeDocState(doc), doc.scale);
         }
 
         function extractTextSegments(node, currentStyle) {
@@ -1144,7 +1526,7 @@
                             segments.forEach(seg => {
                                 const font = seg.style.isBold ? boldFont : standardFont;
                                 const fontSize = (seg.style.fontSize) ? (seg.style.fontSize / scale) : baseFontSize;
-                                const rgb = hexToRgb(seg.style.color);
+                                const rgb = parseColorString(seg.style.color);
                                 const color = PDFLib.rgb(rgb.r/255, rgb.g/255, rgb.b/255);
                                 const words = seg.text.split(/(\s+)/); 
                                 words.forEach(word => {
@@ -1158,15 +1540,19 @@
                                 });
                             });
                         } else {
-                            const rgb = hexToRgb(el.style.borderColor || el.style.backgroundColor || '#000000');
+                            // Logic Updated Here
+                            const rgb = parseColorString(el.style.backgroundColor || el.style.borderColor || '#000000');
                             const pdfColor = PDFLib.rgb(rgb.r/255, rgb.g/255, rgb.b/255);
+                            
                             const pdfY = height - top - elHeight;
                             if (el.classList.contains('whiteout-box')) {
-                                pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, color: PDFLib.rgb(1,1,1), borderOpacity: 0 });
+                                pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, color: pdfColor, borderOpacity: 0 });
                             } else if (el.classList.contains('shape-line')) {
                                 pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, color: pdfColor });
                             } else if (el.classList.contains('shape-box')) {
-                                pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, borderColor: pdfColor, borderWidth: 2/scale, opacity: 1 });
+                                const borderRgb = parseColorString(el.style.borderColor || '#000000');
+                                const borderPdfColor = PDFLib.rgb(borderRgb.r/255, borderRgb.g/255, borderRgb.b/255);
+                                pdfPage.drawRectangle({ x: left, y: pdfY, width: elWidth, height: elHeight, borderColor: borderPdfColor, borderWidth: 2/scale, opacity: 0 });
                             }
                         }
                     });
@@ -1193,16 +1579,6 @@
             document.getElementById('loader-text').innerText = text;
             if(show) l.classList.remove('hidden');
             else l.classList.add('hidden');
-        }
-
-        // --- MISSING HEX TO RGB FUNCTION ADDED HERE ---
-        function hexToRgb(hex) {
-            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-            return result ? {
-                r: parseInt(result[1], 16),
-                g: parseInt(result[2], 16),
-                b: parseInt(result[3], 16)
-            } : { r: 0, g: 0, b: 0 };
         }
     </script>
 </body>

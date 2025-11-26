@@ -45,8 +45,9 @@
             margin-bottom: 20px;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             background: white;
-            transform-origin: center center; /* Changed for rotation */
+            transform-origin: center center;
             transition: transform 0.3s ease;
+            z-index: 1; 
         }
 
         /* Overlay & Elements */
@@ -70,12 +71,6 @@
         }
         .editor-element:hover { outline: 1px dashed #3b82f6; }
         
-        .editor-element.selected { 
-            outline: 2px solid #2563eb; 
-            z-index: 100 !important; 
-            cursor: move; 
-        }
-        
         /* Layering Strategy */
         .whiteout-box { background-color: white; border: none; z-index: 10; } 
         .highlight-box { background-color: #ffff00; opacity: 0.4; mix-blend-mode: multiply; z-index: 15; }
@@ -83,34 +78,41 @@
         .shape-line { background-color: #000; z-index: 20; }
         .image-box, .signature-box { z-index: 25; background-size: contain; background-repeat: no-repeat; background-position: center; }
 
-        /* Specific Elements */
+        /* Specific Elements - Updated for tighter spacing */
         .added-text {
             color: #000;
-            line-height: 1.2;
-            padding: 2px 4px; 
-            white-space: normal; 
+            line-height: 1.0; /* Tighter line height for forms */
+            padding: 0px 2px; /* Minimal padding */
+            white-space: pre-wrap; /* Preserve spaces but allow wrap */
             word-break: break-word; 
-            overflow: hidden; 
+            overflow: visible; 
             cursor: default;
             background: transparent;
             z-index: 30; 
         }
         .added-text:hover { background-color: rgba(59, 130, 246, 0.05); }
+        
+        /* Selected State */
+        .editor-element.selected { 
+            outline: 2px solid #2563eb; 
+            z-index: 100 !important; 
+            cursor: move; 
+        }
+
+        /* Dragging State */
+        .editor-element.dragging {
+            opacity: 0.8;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            z-index: 9999 !important;
+            cursor: move !important;
+        }
+
+        /* Editing State */
         .added-text.selected.is-editing {
-            outline: 2px solid #ef4444; 
+            outline: 1px dashed #ef4444; /* Less intrusive outline */
             cursor: text !important; 
             user-select: text !important; 
             -webkit-user-select: text !important;
-        }
-
-        /* Magic Text Highlight */
-        .magic-highlight {
-            position: absolute;
-            background-color: rgba(59, 130, 246, 0.2);
-            border: 1px solid #3b82f6;
-            cursor: pointer;
-            z-index: 5;
-            pointer-events: none; 
         }
 
         /* Magic Selection Box */
@@ -125,14 +127,15 @@
         /* Resizing Handles */
         .resize-handle {
             position: absolute;
-            z-index: 110; 
+            z-index: 200 !important; 
             touch-action: none;
             display: none; 
-            width: 14px; 
-            height: 14px;
+            width: 12px; 
+            height: 12px;
             background-color: #3b82f6;
             border: 2px solid white;
             border-radius: 50%;
+            pointer-events: all;
         }
         .editor-element.selected .resize-handle { display: block; }
 
@@ -164,8 +167,48 @@
         /* Tabs & Loader */
         .tab-item { user-select: none; max-width: 150px; flex-shrink: 0; }
         .tab-item.active { background-color: #525659; color: white; border-bottom: 2px solid #60a5fa; }
-        .dropdown-menu { display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #e5e5e5; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border-radius: 6px; z-index: 100; min-width: 150px; padding: 4px; }
+        
+        /* Dropdowns */
+        .dropdown-menu { 
+            display: none; 
+            position: fixed; 
+            background: white; 
+            border: 1px solid #e5e5e5; 
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); 
+            border-radius: 6px; 
+            z-index: 9999; 
+            min-width: 150px; 
+            padding: 4px; 
+        }
         .dropdown-menu.show { display: block; }
+        
+        /* Context Menu */
+        #context-menu {
+            display: none;
+            position: fixed;
+            background: white;
+            border: 1px solid #e5e5e5;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-radius: 6px;
+            z-index: 10000;
+            min-width: 160px;
+            padding: 4px 0;
+        }
+        #context-menu.show { display: block; }
+        .ctx-item {
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #374151;
+        }
+        .ctx-item:hover { background-color: #f3f4f6; }
+        .ctx-item.disabled { color: #9ca3af; pointer-events: none; }
+        .ctx-item i { width: 16px; }
+        .ctx-divider { height: 1px; background-color: #e5e5e5; margin: 4px 0; }
+        
         .loader { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #3498db; width: 24px; height: 24px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
@@ -182,14 +225,14 @@
             box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: space-between;
         }
         
-        /* Signature Modal */
-        #sig-modal { background: rgba(0,0,0,0.5); }
+        /* Modals */
+        #sig-modal, #delete-confirm-modal { background: rgba(0,0,0,0.5); }
         
         /* Drop Zone Highlight */
         .drop-active { outline: 4px dashed #3b82f6; outline-offset: -4px; }
     </style>
 </head>
-<body id="main-body">
+<body id="main-body" oncontextmenu="handleContextMenu(event)">
 
     <div id="app-container">
         
@@ -210,10 +253,10 @@
                 
                 <!-- History Tools -->
                 <div class="flex items-center gap-1">
-                    <button onclick="performUndo()" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition" title="Undo">
+                    <button onclick="performUndo()" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition" title="Undo (Ctrl+Z)">
                         <i class="fa-solid fa-rotate-left"></i>
                     </button>
-                    <button onclick="performRedo()" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition" title="Redo">
+                    <button onclick="performRedo()" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition" title="Redo (Ctrl+Y)">
                         <i class="fa-solid fa-rotate-right"></i>
                     </button>
                 </div>
@@ -243,8 +286,8 @@
                     </button>
                     
                     <!-- Guides Dropdown -->
-                    <div class="relative">
-                        <button onclick="toggleDropdown('guides-menu')" id="btn-guide" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition flex items-center gap-1" title="Guides">
+                    <div>
+                        <button onclick="toggleDropdown(event, 'guides-menu')" id="btn-guide" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition flex items-center gap-1" title="Guides">
                             <i class="fa-solid fa-ruler-combined"></i> <i class="fa-solid fa-caret-down text-xs"></i>
                         </button>
                         <div id="guides-menu" class="dropdown-menu">
@@ -262,8 +305,8 @@
                     </button>
 
                     <!-- Shapes Dropdown -->
-                    <div class="relative">
-                        <button onclick="toggleDropdown('shapes-menu')" id="btn-shape" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition flex items-center gap-1" title="Shapes">
+                    <div>
+                        <button onclick="toggleDropdown(event, 'shapes-menu')" id="btn-shape" class="tool-btn p-2 rounded hover:bg-gray-100 text-gray-600 transition flex items-center gap-1" title="Shapes">
                             <i class="fa-solid fa-shapes"></i> <i class="fa-solid fa-caret-down text-xs"></i>
                         </button>
                         <div id="shapes-menu" class="dropdown-menu">
@@ -292,14 +335,10 @@
                         <option value="Courier">Courier</option>
                     </select>
 
-                    <select id="font-size" onchange="updateSelectedProp('size')" class="h-9 text-sm border border-gray-300 rounded px-1 bg-gray-50 hover:bg-white focus:outline-none">
-                        <option value="10">10</option>
-                        <option value="12" selected>12</option>
-                        <option value="14">14</option>
-                        <option value="18">18</option>
-                        <option value="24">24</option>
-                        <option value="36">36</option>
-                    </select>
+                    <!-- Changed to Input for Custom Size -->
+                    <div class="relative w-16" title="Font Size">
+                        <input type="number" id="font-size" value="12" min="1" max="200" oninput="updateSelectedProp('size')" class="h-9 w-full text-sm border border-gray-300 rounded px-1 bg-gray-50 hover:bg-white focus:outline-none text-center">
+                    </div>
                     
                     <button id="btn-bold" onmousedown="event.preventDefault()" onclick="toggleBold()" class="h-9 w-9 rounded hover:bg-gray-200 text-gray-600 font-bold text-lg border border-transparent" title="Bold">B</button>
                     
@@ -334,6 +373,35 @@
             </div>
             <div id="page-list" class="flex-1 overflow-y-auto p-2">
                 <!-- Page items injected here -->
+            </div>
+        </div>
+        
+        <!-- Context Menu -->
+        <div id="context-menu">
+            <div class="ctx-item" onclick="handleCtxCopy()">
+                <i class="fa-regular fa-copy"></i> Copy <span class="text-xs text-gray-400 ml-auto">Ctrl+C</span>
+            </div>
+            <div class="ctx-item" onclick="handleCtxPaste()">
+                <i class="fa-regular fa-paste"></i> Paste <span class="text-xs text-gray-400 ml-auto">Ctrl+V</span>
+            </div>
+            <div class="ctx-divider"></div>
+            <div class="ctx-item text-red-600" onclick="handleCtxDelete()">
+                <i class="fa-regular fa-trash-can"></i> Delete <span class="text-xs text-gray-400 ml-auto">Del</span>
+            </div>
+        </div>
+        
+        <!-- Delete Confirmation Modal -->
+        <div id="delete-confirm-modal" class="hidden fixed inset-0 z-[110] flex items-center justify-center">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4 text-center">
+                <div class="mb-4 text-red-500 text-4xl">
+                    <i class="fa-regular fa-trash-can"></i>
+                </div>
+                <h3 class="font-bold text-xl mb-2 text-gray-800">Delete Page?</h3>
+                <p class="text-gray-600 mb-6 text-sm">Are you sure you want to remove this page? This action cannot be easily undone.</p>
+                <div class="flex justify-center gap-3">
+                    <button onclick="closeDeleteModal()" class="px-4 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 transition">Cancel</button>
+                    <button onclick="executeDeletePage()" class="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition shadow">Delete</button>
+                </div>
             </div>
         </div>
 
@@ -452,9 +520,12 @@
         let activeDocId = null;
         let currentTool = 'cursor';
         let selectedElement = null;
-        let savedRange = null; 
+        let clipboard = null; // Clipboard for Copy/Paste
         const SNAP_THRESHOLD = 10; 
         const MIN_SIZE = 20; 
+        
+        // Deletion State
+        let pageToDeleteIdx = null;
 
         // --- History ---
         const historyStack = [];
@@ -593,6 +664,17 @@
                     }
                 }
             });
+            
+            // Close dropdowns when clicking outside
+            document.addEventListener('click', (e) => {
+                if(!e.target.closest('.tool-btn') && !e.target.closest('.dropdown-menu')) {
+                    document.querySelectorAll('.dropdown-menu').forEach(el => el.classList.remove('show'));
+                }
+                // Hide context menu
+                if(!e.target.closest('#context-menu')) {
+                     document.getElementById('context-menu').classList.remove('show');
+                }
+            });
 
             try {
                 const savedDocs = await loadAllFromDB();
@@ -610,15 +692,130 @@
             if (e.touches && e.touches.length > 0) return { x: e.touches[0].clientX, y: e.touches[0].clientY, target: e.touches[0].target };
             return { x: e.clientX, y: e.clientY, target: e.target };
         }
+        
+        // KEYDOWN HANDLER for Copy/Paste
         document.addEventListener('keydown', (e) => {
+            // Undo / Redo
             if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); performUndo(); return; }
             if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); performRedo(); return; }
+            
+            // Copy (Ctrl+C)
+            if((e.ctrlKey || e.metaKey) && e.key === 'c') {
+                if(selectedElement && !selectedElement.classList.contains('is-editing')) {
+                    e.preventDefault();
+                    copySelected();
+                }
+                return;
+            }
+            
+            // Paste (Ctrl+V)
+            if((e.ctrlKey || e.metaKey) && e.key === 'v') {
+                if(!document.activeElement.isContentEditable) { // Don't paste if typing in text box
+                    e.preventDefault();
+                    pasteClipboard();
+                }
+                return;
+            }
+
             if (document.activeElement && document.activeElement.isContentEditable) return; 
             if(e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
         });
+
         function handleWorkspaceClick(e) {
             if (e.target.id === 'pdf-workspace' || e.target.classList.contains('pdf-page-container')) deselectAll();
         }
+
+        // --- Copy / Paste Logic ---
+        function copySelected() {
+            if(!selectedElement) return;
+            clipboard = {
+                type: 'element',
+                classList: Array.from(selectedElement.classList),
+                style: {
+                    width: selectedElement.style.width,
+                    height: selectedElement.style.height,
+                    fontSize: selectedElement.style.fontSize,
+                    color: selectedElement.style.color,
+                    backgroundColor: selectedElement.style.backgroundColor,
+                    borderColor: selectedElement.style.borderColor,
+                    fontFamily: selectedElement.style.fontFamily,
+                    backgroundImage: selectedElement.style.backgroundImage,
+                    fontWeight: selectedElement.style.fontWeight
+                },
+                innerHTML: selectedElement.innerHTML,
+                dataset: { ...selectedElement.dataset }
+            };
+            // Visual feedback?
+            console.log("Copied to clipboard");
+        }
+
+        function pasteClipboard() {
+            if(!clipboard || !activeDocId) return;
+            const doc = getActiveDoc();
+            const pageObj = getMostVisiblePage(doc);
+            
+            const el = document.createElement('div');
+            el.className = clipboard.classList.join(' ');
+            el.classList.remove('selected', 'is-editing', 'dragging');
+            
+            // Apply Styles
+            Object.assign(el.style, clipboard.style);
+            
+            // Position Center offset
+            const centerX = pageObj.width / 2; 
+            const centerY = pageObj.height / 2;
+            // Slight random offset so multiple pastes don't stack perfectly
+            const offset = Math.floor(Math.random() * 20) - 10;
+            
+            el.style.left = (centerX - parseInt(el.style.width||100)/2 + offset) + 'px';
+            el.style.top = (centerY - parseInt(el.style.height||30)/2 + offset) + 'px';
+            
+            el.innerHTML = clipboard.innerHTML;
+            if(clipboard.dataset) Object.assign(el.dataset, clipboard.dataset);
+
+            if(el.classList.contains('added-text')) {
+                el.contentEditable = true;
+                setupTextEditing(el);
+            }
+            
+            pageObj.element.appendChild(el);
+            enableDragAndSelect(el);
+            selectElement(el);
+            pushAction({ type: 'create', elements: [el], parent: pageObj.element });
+        }
+        
+        // --- Context Menu ---
+        function handleContextMenu(e) {
+            // Check if clicking on workspace or element
+            if(e.target.closest('#pdf-workspace') || e.target.closest('.editor-element')) {
+                e.preventDefault();
+                const menu = document.getElementById('context-menu');
+                menu.style.top = e.clientY + 'px';
+                menu.style.left = e.clientX + 'px';
+                menu.classList.add('show');
+                
+                // If clicked on element, select it first
+                if(e.target.classList.contains('editor-element')) {
+                    selectElement(e.target);
+                } else if(e.target.parentElement.classList.contains('editor-element')) {
+                    selectElement(e.target.parentElement);
+                }
+            }
+        }
+        
+        function handleCtxCopy() {
+            copySelected();
+            document.getElementById('context-menu').classList.remove('show');
+        }
+        function handleCtxPaste() {
+            pasteClipboard();
+            document.getElementById('context-menu').classList.remove('show');
+        }
+        function handleCtxDelete() {
+            deleteSelected();
+            document.getElementById('context-menu').classList.remove('show');
+        }
+
 
         // --- Document Loading ---
         function getActiveDoc() { return documents.find(d => d.id === activeDocId); }
@@ -757,7 +954,23 @@
             deselectAll();
         }
 
-        function toggleDropdown(id) { document.getElementById(id).classList.toggle('show'); }
+        // Updated toggleDropdown for fixed positioning to avoid overflow issues
+        function toggleDropdown(event, id) {
+            // Close all first
+            const wasOpen = document.getElementById(id).classList.contains('show');
+            document.querySelectorAll('.dropdown-menu').forEach(el => el.classList.remove('show'));
+            
+            if (!wasOpen && event) {
+                event.stopPropagation();
+                const btn = event.currentTarget;
+                const menu = document.getElementById(id);
+                const rect = btn.getBoundingClientRect();
+                
+                menu.style.top = (rect.bottom + 2) + 'px';
+                menu.style.left = rect.left + 'px';
+                menu.classList.add('show');
+            }
+        }
 
         // --- Signature ---
         let sigCanvas, sigCtx, isSigning = false;
@@ -957,14 +1170,26 @@
         }
 
         function removePage(idx) {
-            if(!confirm('Delete this page?')) return;
+            pageToDeleteIdx = idx;
+            document.getElementById('delete-confirm-modal').classList.remove('hidden');
+        }
+        
+        function closeDeleteModal() {
+            document.getElementById('delete-confirm-modal').classList.add('hidden');
+            pageToDeleteIdx = null;
+        }
+
+        function executeDeletePage() {
+            if(pageToDeleteIdx === null) return;
+            const idx = pageToDeleteIdx;
+            closeDeleteModal();
+            
             const doc = getActiveDoc();
             const pObj = doc.pages[idx];
             pObj.element.parentElement.remove(); // Remove DOM
             doc.pages.splice(idx, 1);
             
             // Shift rotations
-            // This is messy with a simple object map, simpler to rebuild it
             const newRot = {};
             let newIdx = 0;
             for(let k in doc.pageRotations) {
@@ -1125,12 +1350,34 @@
             }
             selectedElement = null;
         }
+        
+        // --- UPDATED Drag Logic for Text Editing Fix ---
         function enableDragAndSelect(el) {
             let isDragging = false; let offset = [0,0]; let startState = null;
+            
+            // Helper to check edit state
+            const isTextEditing = () => el.classList.contains('added-text') && el.classList.contains('is-editing');
+
             const startDrag = (e) => {
                 if(e.target.classList.contains('resize-handle') || currentTool !== 'cursor') return;
-                e.stopPropagation(); if(e.type==='mousedown') e.preventDefault();
-                selectElement(el); isDragging=true;
+                
+                // FIX: If we are editing text, let the click through to select text, do NOT start dragging
+                if (isTextEditing()) {
+                    e.stopPropagation(); 
+                    return; 
+                }
+
+                e.stopPropagation(); 
+                
+                // Only prevent default if NOT editing to stop text cursor flickering on non-text elements
+                if(e.type === 'mousedown') e.preventDefault();
+                
+                selectElement(el); 
+                isDragging=true;
+                
+                // Visual feedback during drag
+                el.classList.add('dragging');
+                
                 const pos = getEventPos(e); offset=[el.offsetLeft-pos.x, el.offsetTop-pos.y];
                 startState = { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height };
             };
@@ -1140,8 +1387,8 @@
             };
             const endDrag = () => { 
                 if(isDragging) {
+                    el.classList.remove('dragging');
                     // Logic to handle dragging between pages
-                    // Check if element center is inside another page overlay
                     const elRect = el.getBoundingClientRect();
                     const elCenterX = elRect.left + elRect.width/2;
                     const elCenterY = elRect.top + elRect.height/2;
@@ -1150,8 +1397,6 @@
                     let newParent = null;
                     let bestPage = null;
                     
-                    // Iterate current DOM pages (visual order)
-                    // We need to look at DOM elements with class .page-overlay
                     const overlays = Array.from(document.querySelectorAll('.page-overlay'));
                     
                     for(const ov of overlays) {
@@ -1165,19 +1410,13 @@
                     }
                     
                     if(newParent && bestPage) {
-                        // Reparent
                         const oldRect = el.getBoundingClientRect();
                         const newParentRect = newParent.getBoundingClientRect();
-                        
                         const newLeft = oldRect.left - newParentRect.left;
                         const newTop = oldRect.top - newParentRect.top;
-                        
                         newParent.appendChild(el);
                         el.style.left = newLeft + 'px';
                         el.style.top = newTop + 'px';
-                        
-                        // Note: History tracking for reparenting is complex. 
-                        // For simplicity, we just push a move_resize event which will effectively "snap" it to the new parent on re-load/save
                     }
 
                     if(startState) pushAction({ type: 'move_resize', element: el, start: startState, end: { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height } });
@@ -1188,12 +1427,18 @@
             window.addEventListener('mousemove', drag); window.addEventListener('touchmove', drag, {passive:false});
             window.addEventListener('mouseup', endDrag); window.addEventListener('touchend', endDrag);
         }
+        
         function addResizingHandles(el) {
             el.querySelectorAll('.resize-handle').forEach(h => h.remove());
             ['tl','tr','bl','br'].forEach(pos => {
                 const h = document.createElement('div'); h.className=`resize-handle ${pos}`;
-                if(pos.includes('t')) h.style.top='-8px'; if(pos.includes('b')) h.style.bottom='-8px';
-                if(pos.includes('l')) h.style.left='-8px'; if(pos.includes('r')) h.style.right='-8px';
+                if(pos.includes('t')) h.style.top='-6px'; if(pos.includes('b')) h.style.bottom='-6px';
+                if(pos.includes('l')) h.style.left='-6px'; if(pos.includes('r')) h.style.right='-6px';
+                
+                // FIX: Inline styles for cursor often work best for these dynamic handles
+                if(pos==='tl' || pos==='br') h.style.cursor = 'nwse-resize';
+                else h.style.cursor = 'nesw-resize';
+
                 h.dataset.position=pos; el.appendChild(h);
                 const startR=(e)=>{
                     e.stopPropagation(); e.preventDefault();
@@ -1263,7 +1508,7 @@
                             // Parse Color properly
                             const rgb = parseColorString(style.color);
                             const color = PDFLib.rgb(rgb.r/255, rgb.g/255, rgb.b/255);
-                            pdfPage.drawText(el.innerText, { x: left, y: pdfY + elHeight - fontSize, size: fontSize, font: helvetica, color: color });
+                            pdfPage.drawText(el.innerText, { x: left, y: pdfY + elHeight - fontSize + (fontSize * 0.1), size: fontSize, font: helvetica, color: color });
                         }
                         else if(el.classList.contains('image-box') || el.classList.contains('signature-box')) {
                             const bgUrl = el.style.backgroundImage.slice(5, -2);

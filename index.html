@@ -938,6 +938,7 @@
                     const el = currentDrawing;
                     let isValid = true;
                     if(currentTool === 'line') { if(el.offsetWidth < 5) isValid = false; } 
+                    else if (currentTool === 'text') { isValid = true; } // Always valid
                     else { if(el.offsetWidth < MIN_SIZE || el.offsetHeight < MIN_SIZE) isValid = false; }
 
                     if(!isValid) { el.remove(); selectedElement = null; } 
